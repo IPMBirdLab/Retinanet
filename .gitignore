@@ -1,0 +1,10 @@
+experiments/
+__pycache__/
+.vscode/
+.ipynb_checkpoints/
+
+results/
+results_*/
+
+*.tgz
+*.pth
