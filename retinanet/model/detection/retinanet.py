@@ -423,14 +423,6 @@ class RetinaNet(nn.Module):
         # used only on torchscript mode
         self._has_warned = False
 
-    @torch.jit.unused
-    def eager_outputs(self, losses, detections):
-        # type: (Dict[str, Tensor], List[Dict[str, Tensor]]) -> Tuple[Dict[str, Tensor], List[Dict[str, Tensor]]]
-        if self.training:
-            return losses
-
-        return detections
-
     def compute_loss(self, targets, head_outputs, anchors):
         # type: (List[Dict[str, Tensor]], Dict[str, Tensor], List[Tensor]) -> Dict[str, Tensor]
         matched_idxs = []
@@ -534,8 +526,7 @@ class RetinaNet(nn.Module):
         if self.training and targets is None:
             raise ValueError("In training mode, targets should be passed")
 
-        if self.training:
-            assert targets is not None
+        if targets is not None:
             for target in targets:
                 boxes = target["boxes"]
                 if isinstance(boxes, torch.Tensor):
@@ -593,12 +584,11 @@ class RetinaNet(nn.Module):
 
         losses = {}
         detections: List[Dict[str, Tensor]] = []
-        if self.training:
-            assert targets is not None
-
+        if targets is not None:
             # compute the losses
             losses = self.compute_loss(targets, head_outputs, anchors)
-        else:
+            
+        if not self.training:
             # recover level sizes
             num_anchors_per_level = [x.size(2) * x.size(3) for x in features]
             HW = 0
@@ -631,7 +621,15 @@ class RetinaNet(nn.Module):
                 )
                 self._has_warned = True
             return losses, detections
-        return self.eager_outputs(losses, detections)
+        
+        # type: (Dict[str, Tensor], 
+        #        List[Dict[str, Tensor]]) -> Tuple[Dict[str, Tensor],
+        #        List[Dict[str, Tensor]]]
+        if self.training:
+            return losses
+        if targets is not None:
+            return losses, detections
+        return detections
 
 
 model_urls = {
