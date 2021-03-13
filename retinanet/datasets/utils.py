@@ -57,3 +57,20 @@ class TransformDatasetWrapper(Dataset):
 
     def __len__(self):
         return len(self.dataset)
+
+
+def one_hot_embedding(label, classes):
+    """Embedding labels to one-hot form.
+
+    Args:
+      labels: (int) class labels.
+      num_classes: (int) number of classes.
+
+    Returns:
+      (tensor) encoded labels, sized [N, #classes].
+    """
+
+    vector = np.zeros((classes), dtype=np.float32)
+    if len(label) > 0:
+        vector[label] = 1.0
+    return vector
