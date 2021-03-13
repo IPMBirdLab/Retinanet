@@ -4,6 +4,7 @@ import warnings
 
 import torch
 from torch import nn, Tensor
+import torch.nn.functional as F
 from typing import Dict, List, Tuple, Optional
 
 from ._utils import overwrite_eps
@@ -38,12 +39,13 @@ class RetinaNetHead(nn.Module):
         num_classes (int): number of classes to be predicted
     """
 
-    def __init__(self, in_channels, num_anchors, num_classes):
+    def __init__(self, in_channels, num_anchors, num_classes, num_fpn_levels):
         super().__init__()
         self.classification_head = RetinaNetClassificationHead(
             in_channels, num_anchors, num_classes
         )
         self.regression_head = RetinaNetRegressionHead(in_channels, num_anchors)
+        self.image_classification_head = RetinaNetImageClassificationHead(in_channels, num_classes, num_fpn_levels)
 
     def compute_loss(self, targets, head_outputs, anchors, matched_idxs):
         # type: (List[Dict[str, Tensor]], Dict[str, Tensor], List[Tensor], List[Tensor]) -> Dict[str, Tensor]
@@ -54,6 +56,7 @@ class RetinaNetHead(nn.Module):
             "bbox_regression": self.regression_head.compute_loss(
                 targets, head_outputs, anchors, matched_idxs
             ),
+            "img_classification": self.image_classification_head.compute_loss(targets, head_outputs)
         }
 
     def forward(self, x):
@@ -61,6 +64,7 @@ class RetinaNetHead(nn.Module):
         return {
             "cls_logits": self.classification_head(x),
             "bbox_regression": self.regression_head(x),
+            "img_classification": self.image_classification_head(x),
         }
 
 
@@ -107,6 +111,11 @@ class RetinaNetClassificationHead(nn.Module):
         self.BETWEEN_THRESHOLDS = det_utils.Matcher.BETWEEN_THRESHOLDS
 
     def compute_loss(self, targets, head_outputs, matched_idxs):
+        device = next(self.parameters()).device
+
+        if targets[0].get("labels", None) is None:
+            return torch.zeros(1).to(device)
+
         # type: (List[Dict[str, Tensor]], Dict[str, Tensor], List[Tensor]) -> Tensor
         losses = []
 
@@ -155,7 +164,7 @@ class RetinaNetClassificationHead(nn.Module):
             N, _, H, W = cls_logits.shape
             cls_logits = cls_logits.view(N, -1, self.num_classes, H, W)
             cls_logits = cls_logits.permute(0, 3, 4, 1, 2)
-            cls_logits = cls_logits.reshape(N, -1, self.num_classes)  # Size=(N, HWA, 4)
+            cls_logits = cls_logits.reshape(N, -1, self.num_classes)  # Size=(N, HWA, K)
 
             all_cls_logits.append(cls_logits)
 
@@ -200,6 +209,11 @@ class RetinaNetRegressionHead(nn.Module):
         self.box_coder = det_utils.BoxCoder(weights=(1.0, 1.0, 1.0, 1.0))
 
     def compute_loss(self, targets, head_outputs, anchors, matched_idxs):
+        device = next(self.parameters()).device
+
+        if targets[0].get("boxes", None) is None:
+            return torch.zeros(1).to(device)
+
         # type: (List[Dict[str, Tensor]], Dict[str, Tensor], List[Tensor], List[Tensor]) -> Tensor
         losses = []
 
@@ -257,6 +271,45 @@ class RetinaNetRegressionHead(nn.Module):
 
         return torch.cat(all_bbox_regression, dim=1)
 
+
+class RetinaNetImageClassificationHead(nn.Module):
+    def __init__(self, in_channels, num_classes, num_features):
+        super().__init__()
+
+        self.num_classes = num_classes
+        self.num_features = num_features
+
+        for l in range(num_features):
+            self.__setattr__(
+                f"conv_{l + 1}",
+                nn.Conv2d(in_channels, num_classes, kernel_size=1, stride=1),
+            )
+        self.relu = nn.ReLU()
+
+    def compute_loss(self, targets, head_outputs):
+        device = next(self.parameters()).device
+
+        if targets[0].get("img_cls_labels", None) is None:
+            return torch.zeros(1).to(device)
+        
+        class_loss_fn = nn.MultiLabelSoftMarginLoss().to(device)
+        
+        cls_logits = head_outputs["img_classification"]
+        cls_labels = torch.cat(list(map(lambda x: x["img_cls_labels"].unsqueeze(0), targets)), 0)
+
+        return class_loss_fn(cls_logits, cls_labels.float())
+
+    def forward(self, x):
+        cls_logits_list = []
+        for i, features in enumerate(x):
+            cls_logits = self.__getattr__(f"conv_{i + 1}")(features)
+            cls_logits = self.relu(cls_logits)
+            cls_logits = F.max_pool2d(cls_logits, kernel_size=cls_logits.size()[-2:])
+            cls_logits = cls_logits.squeeze().unsqueeze(1)
+            cls_logits_list.append(cls_logits)
+
+        return torch.max(torch.cat(cls_logits_list, 1), 1)[0]
+        
 
 class RetinaNet(nn.Module):
     """
@@ -352,6 +405,7 @@ class RetinaNet(nn.Module):
         self,
         backbone,
         num_classes,
+        num_fpn_levels,
         # transform parameters
         min_size=800,
         max_size=1333,
@@ -394,6 +448,7 @@ class RetinaNet(nn.Module):
                 backbone.out_channels,
                 anchor_generator.num_anchors_per_location()[0],
                 num_classes,
+                num_fpn_levels,
             )
         self.head = head
 
@@ -425,18 +480,21 @@ class RetinaNet(nn.Module):
 
     def compute_loss(self, targets, head_outputs, anchors):
         # type: (List[Dict[str, Tensor]], Dict[str, Tensor], List[Tensor]) -> Dict[str, Tensor]
-        matched_idxs = []
-        for anchors_per_image, targets_per_image in zip(anchors, targets):
-            if targets_per_image["boxes"].numel() == 0:
-                matched_idxs.append(
-                    torch.full((anchors_per_image.size(0),), -1, dtype=torch.int64)
-                )
-                continue
+        if targets[0].get("labels", None) is not None:
+            matched_idxs = []
+            for anchors_per_image, targets_per_image in zip(anchors, targets):
+                if targets_per_image["boxes"].numel() == 0:
+                    matched_idxs.append(
+                        torch.full((anchors_per_image.size(0),), -1, dtype=torch.int64)
+                    )
+                    continue
 
-            match_quality_matrix = box_ops.box_iou(
-                targets_per_image["boxes"], anchors_per_image
-            )
-            matched_idxs.append(self.proposal_matcher(match_quality_matrix))
+                match_quality_matrix = box_ops.box_iou(
+                    targets_per_image["boxes"], anchors_per_image
+                )
+                matched_idxs.append(self.proposal_matcher(match_quality_matrix))
+        else:
+            matched_idxs = None
 
         return self.head.compute_loss(targets, head_outputs, anchors, matched_idxs)
 
@@ -526,7 +584,7 @@ class RetinaNet(nn.Module):
         if self.training and targets is None:
             raise ValueError("In training mode, targets should be passed")
 
-        if targets is not None:
+        if targets is not None and targets[0].get("boxes", None) is not None:
             for target in targets:
                 boxes = target["boxes"]
                 if isinstance(boxes, torch.Tensor):
@@ -549,11 +607,14 @@ class RetinaNet(nn.Module):
             original_image_sizes.append((val[0], val[1]))
 
         # transform the input
-        images, targets = self.transform(images, targets)
+        if targets is not None and targets[0].get("boxes", None) is not None:
+            images, targets = self.transform(images, targets)
+        else:
+            images, _ = self.transform(images, None)
 
         # Check for degenerate boxes
         # TODO: Move this to a function
-        if targets is not None:
+        if targets is not None and targets[0].get("boxes", None) is not None:
             for target_idx, target in enumerate(targets):
                 boxes = target["boxes"]
                 degenerate_boxes = boxes[:, 2:] <= boxes[:, :2]
@@ -601,9 +662,10 @@ class RetinaNet(nn.Module):
             # split outputs per level
             split_head_outputs: Dict[str, List[Tensor]] = {}
             for k in head_outputs:
-                split_head_outputs[k] = list(
-                    head_outputs[k].split(num_anchors_per_level, dim=1)
-                )
+                if k not in ["img_classification"]:
+                    split_head_outputs[k] = list(
+                        head_outputs[k].split(num_anchors_per_level, dim=1)
+                    )
             split_anchors = [list(a.split(num_anchors_per_level)) for a in anchors]
 
             # compute the detections
@@ -626,9 +688,9 @@ class RetinaNet(nn.Module):
         #        List[Dict[str, Tensor]]) -> Tuple[Dict[str, Tensor],
         #        List[Dict[str, Tensor]]]
         if self.training:
-            return losses
+            return losses, head_outputs["img_classification"]
         if targets is not None:
-            return losses, detections
+            return losses, detections, head_outputs["img_classification"]
         return detections
 
 
@@ -700,7 +762,8 @@ def retinanet_resnet50_fpn(
         extra_blocks=LastLevelP6P7(256, 256),
         trainable_layers=trainable_backbone_layers,
     )
-    model = RetinaNet(backbone, num_classes, **kwargs)
+    num_fpn_levels = 5
+    model = RetinaNet(backbone, num_classes, num_fpn_levels, **kwargs)
     if pretrained:
         state_dict = load_state_dict_from_url(
             model_urls["retinanet_resnet50_fpn_coco"], progress=progress
