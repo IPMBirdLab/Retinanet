@@ -45,6 +45,7 @@ parser.add_argument("--use_p_of_data", default=0.5, type=float)
 parser.add_argument("--lr", default=0.01, type=float)
 
 parser.add_argument("--pretrained", default="", type=str)
+parser.add_argument("--pretrained_backend", action="store_true")
 
 parser.add_argument("--log_dir", default="experiments", type=str)
 parser.add_argument("--tag", default="", type=str)
@@ -86,20 +87,114 @@ class Average_Meter:
         self.data_dic = {key: [] for key in self.keys}
 
 
+def batched_nms(boxes, scores, labels=None, iou_threshold=0.5):
+    """Implementation based on :
+    https://github.com/pytorch/vision/issues/392#issuecomment-545809954
+
+    Parameters
+    ----------
+    boxes : torch.Tensor[batch_size, N, 4]
+    scores : torch.Tensor[batch_size, N]
+    labels : torch.Tensor[batch_size, N]
+    iou_threshold : float
+
+
+    Returns
+    -------
+    [type]
+        [description]
+    """
+    batch_size, N, _ = boxes.shape
+    indices = torch.arange(batch_size, device=boxes.device)
+    if labels is None:
+        indices = indices[:, None].expand(batch_size, N).flatten()
+    else:
+        indices = (
+            (labels + 1) * (indices[:, None].expand(batch_size, N) + 1)
+        ).flatten()
+    boxes_flat = boxes.flatten(0, 1)
+    scores_flat = scores.flatten()
+    indices_flat = torchvision.ops.boxes.batched_nms(
+        boxes_flat, scores_flat, indices, iou_threshold
+    )
+
+    keep_indices = torch.stack([indices_flat // batch_size, indices_flat % batch_size])
+    return keep_indices
+
+
+def match_predictions(boxes, gt_boxes):
+    match_matrix = torchvision.ops.box_iou(boxes, gt_boxes)
+    matched_pred_scores, _ = match_matrix.max(dim=1)
+    return matched_pred_scores
+
+
 def evaluate(model, loader):
     model.eval()
 
     val_meter = Average_Meter(["loss", "classification_loss", "bbox_regression_loss"])
+    ap_meter = Average_Meter(["AP"])
     with torch.no_grad():
-        for step, (images, labels) in enumerate(loader):
+        for step, (images, targets) in enumerate(loader):
             ###############################################################################
             # Normal
             ###############################################################################
-            losses, detections, _ = model(images, labels)
+            losses, detections, _ = model(images, targets)
 
             loss = losses["classification"] + losses["bbox_regression"]
 
-            # TODO: evaluate detectioins with proper metrics
+            # Batched_nms (useless)
+            # boxes, scores, labels = (
+            #     torch.stack([det["boxes"] for det in detections]),
+            #     torch.stack([det["scores"] for det in detections]),
+            #     torch.stack([det["labels"] for det in detections]),
+            # )
+            # keep = batched_nms(boxes, scores, labels, 0.5)
+            # boxes, scores = boxes[keep], scores[keep]
+
+            boxes, scores, labels = (
+                [det["boxes"] for det in detections],
+                [det["scores"] for det in detections],
+                [det["labels"] for det in detections],
+            )
+
+            gt_boxes, gt_labels = (
+                [lbl["boxes"] for lbl in targets],
+                [lbl["labels"] for lbl in targets],
+            )
+
+            for (
+                boxes_per_img,
+                scores_per_img,
+                labels_per_img,
+                gt_boxes_per_img,
+                gt_labels_per_img,
+            ) in zip(boxes, scores, labels, gt_boxes, gt_labels):
+                keep = torchvision.ops.batched_nms(
+                    boxes_per_img, scores_per_img, labels_per_img, 0.5
+                )
+                boxes_per_img, scores_per_img = (
+                    boxes_per_img[keep],
+                    scores_per_img[keep],
+                )
+
+                match_scores = match_predictions(boxes_per_img, gt_boxes_per_img)
+                _, match_indices = torch.sort(scores_per_img, dim=0, descending=True)
+                match_scores = match_scores[match_indices]
+                predicted_truth = torch.where(match_scores > 0.5, 1, 0).to(
+                    match_scores.device
+                )
+
+                # compute the true-positive sums
+                tp = predicted_truth.float().cumsum(0)
+                # create ranks range
+                rg = torch.arange(1, tp.size(0) + 1).float().to(match_scores.device)
+                # compute precision curve
+                precision = tp.div(rg)
+                # compute average precision
+                ap = precision[match_scores.bool()].sum() / max(
+                    float(match_scores.sum()), 1
+                )
+                ap_meter.add({"AP": ap.item()})
 
             val_meter.add(
                 {
@@ -111,7 +206,7 @@ def evaluate(model, loader):
 
     model.train()
 
-    return val_meter.get()
+    return val_meter.get() + [ap_meter.get()]
 
 
 def _train(model, train_loader, val_loader):
@@ -124,12 +219,13 @@ def _train(model, train_loader, val_loader):
         optimizer, T_max=epochs, eta_min=args.lr * 1e-5
     )
 
-    writer = SummaryWriter(os.path.join(args.log_dir, "logs/tensorboard"))
+    writer = SummaryWriter(
+        os.path.join(args.log_dir, "logs/tensorboard"), filename_suffix=args.tag
+    )
     train_meter = Average_Meter(["loss", "classification_loss", "bbox_regression_loss"])
 
     best_metric = 1000
     for epoch in range(1, epochs):
-        print("start epoch")
         for i_batch, batch in enumerate(train_loader):
 
             optimizer.zero_grad()
@@ -146,7 +242,6 @@ def _train(model, train_loader, val_loader):
             ################################################################################
             # Log
             ################################################################################
-            print("logging")
             train_meter.add(
                 {
                     "loss": loss.item(),
@@ -176,13 +271,12 @@ def _train(model, train_loader, val_loader):
                     float(loss.item()),
                 )
             )
-        print("epoch end")
         scheduler.step()
         writer.add_scalar("HP/lr", optimizer.param_groups[0]["lr"], epoch)
         ################################################################################
         # Evaluate
         ################################################################################
-        loss, cls_loss, bbox_loss = evaluate(model, val_loader)
+        loss, cls_loss, bbox_loss, mAP = evaluate(model, val_loader)
         tloss, tcls_loss, tbbox_loss = train_meter.get(clear=True)
 
         writer.add_scalars("Evaluate/Losses/loss", {"train": tloss, "val": loss}, epoch)
@@ -196,12 +290,14 @@ def _train(model, train_loader, val_loader):
             {"train": tbbox_loss, "val": bbox_loss},
             epoch,
         )
+        writer.add_scalars(
+            "Evaluate/Metrics/mAP",
+            {"train": 0, "val": mAP},
+            epoch,
+        )
         print(
-            "Evaluation -> Epoch: {} | Classification loss: {:1.5f} | Regression loss: {:1.5f} | Running loss: {:1.5f}".format(
-                epoch,
-                cls_loss,
-                bbox_loss,
-                loss,
+            "Evaluation -> Epoch: {} | Classification loss: {:1.5f} | Regression loss: {:1.5f} | Running loss: {:1.5f} | mAP: {:.2f}".format(
+                epoch, cls_loss, bbox_loss, loss, mAP
             )
         )
 
@@ -264,7 +360,9 @@ if __name__ == "__main__":
     )
 
     model = retinanet_resnet50_fpn(
-        num_classes=2, pretrained=False, pretrained_backbone=False
+        num_classes=2,
+        pretrained=args.pretrained_backend,
+        pretrained_backbone=args.pretrained_backend,
     )
 
     if args.pretrained != "":

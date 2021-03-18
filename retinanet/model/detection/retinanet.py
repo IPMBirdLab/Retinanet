@@ -284,6 +284,10 @@ class RetinaNetImageClassificationHead(nn.Module):
                 f"conv_{l + 1}",
                 nn.Conv2d(in_channels, num_classes, kernel_size=1, stride=1),
             )
+            self.__setattr__(
+                f"bn_{l + 1}",
+                nn.BatchNorm2d(num_classes),
+            )
         self.relu = nn.ReLU()
 
     def compute_loss(self, targets, head_outputs):
@@ -303,6 +307,7 @@ class RetinaNetImageClassificationHead(nn.Module):
         cls_logits_list = []
         for i, features in enumerate(x):
             cls_logits = self.__getattr__(f"conv_{i + 1}")(features)
+            cls_logits = self.__getattr__(f"bn_{i + 1}")(cls_logits)
             cls_logits = self.relu(cls_logits)
             cls_logits = F.max_pool2d(cls_logits, kernel_size=cls_logits.size()[-2:])
             cls_logits = cls_logits.squeeze().unsqueeze(1)
@@ -698,6 +703,30 @@ model_urls = {
     "retinanet_resnet50_fpn_coco": "https://download.pytorch.org/models/retinanet_resnet50_fpn_coco-eeacb38b.pth",
 }
 
+#######################################################################
+# Load Model State Dictionary
+#######################################################################
+# Dinamically loading model weights
+def get_map_location():
+    if torch.cuda.is_available():
+        map_location = lambda storage, loc: storage.cuda()
+    else:
+        map_location = "cpu"
+
+    return map_location
+
+
+def merge_state_dicts(model_std, pretrained_std):
+    merged_dict = {}
+    for k, v in model_std.items():
+        if k in pretrained_std and v.size() == pretrained_std[k].size():
+            merged_dict[k] = pretrained_std[k]
+        else:
+            merged_dict[k] = v
+
+    return merged_dict
+#######################################################################
+
 
 def retinanet_resnet50_fpn(
     pretrained=False,
@@ -765,9 +794,16 @@ def retinanet_resnet50_fpn(
     num_fpn_levels = 5
     model = RetinaNet(backbone, num_classes, num_fpn_levels, **kwargs)
     if pretrained:
+        # state_dict = load_state_dict_from_url(
+        #     model_urls["retinanet_resnet50_fpn_coco"], progress=progress
+        # )
         state_dict = load_state_dict_from_url(
-            model_urls["retinanet_resnet50_fpn_coco"], progress=progress
+            model_urls["retinanet_resnet50_fpn_coco"],
+            progress=progress,
+            map_location=get_map_location(),
         )
+        std = model.state_dict()
+        state_dict = merge_state_dicts(std, state_dict)
         model.load_state_dict(state_dict)
         overwrite_eps(model, 0.0)
     return model
