@@ -49,6 +49,7 @@ parser.add_argument("--use_p_of_data", default=0.5, type=float)
 parser.add_argument("--lr", default=0.01, type=float)
 
 parser.add_argument("--pretrained", default="", type=str)
+parser.add_argument("--pretrained_backend", action="store_true")
 
 parser.add_argument("--log_dir", default="experiments", type=str)
 parser.add_argument("--tag", default="", type=str)
@@ -100,9 +101,9 @@ def calculate_metrics(preds, labels):
     # false_positive = ((preds - labels) > 0).float().sum()
 
     acc = true_preds / total
-    percision = true_positive / total_predicted_positive
-    recall = true_positive / total_actual_positive
-    f1 = (2 * percision * recall) / (percision + recall)
+    percision = true_positive / max(total_predicted_positive, 1)
+    recall = true_positive / max(total_actual_positive, 1)
+    f1 = (2 * percision * recall) / max((percision + recall), 1)
 
     return acc[1], percision[1], recall[1], f1[1]
 
@@ -159,7 +160,7 @@ def _train(model, train_loader, val_loader):
 
     model.train()
     model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=0.01)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
     # optimizer = optim.SGD(
     #     model.parameters(), lr=args.lr, momentum=0.9, weight_decay=0.01, nesterov=False
     # )
@@ -167,7 +168,9 @@ def _train(model, train_loader, val_loader):
         optimizer, T_max=epochs, eta_min=args.lr * 1e-5
     )
 
-    writer = SummaryWriter(os.path.join(args.log_dir, "logs/tensorboard"))
+    writer = SummaryWriter(
+        os.path.join(args.log_dir, "logs/tensorboard"), filename_suffix=args.tag
+    )
     train_meter = Average_Meter(
         ["loss", "image_classification_loss", "acc", "precision", "recall", "F1"]
     )
@@ -298,9 +301,6 @@ if __name__ == "__main__":
         dataset, p=args.train_percent, use_p_of_data=args.use_p_of_data
     )
 
-    # train_sampler = SubsetRandomSampler(train_idx)
-    # valid_sampler = SubsetRandomSampler(valid_idx)
-
     train_dataset = Subset(TransformDatasetWrapper(dataset, train_transform), train_idx)
     val_dataset = Subset(TransformDatasetWrapper(dataset, train_transform), valid_idx)
 
@@ -329,8 +329,13 @@ if __name__ == "__main__":
         shuffle=False,
     )
 
+    if args.pretrained_backend:
+        print("Using transferLearning")
+
     model = retinanet_resnet50_fpn(
-        num_classes=2, pretrained=False, pretrained_backbone=False
+        num_classes=2,
+        pretrained=args.pretrained_backend,
+        pretrained_backbone=args.pretrained_backend,
     )
 
     if args.pretrained != "":
