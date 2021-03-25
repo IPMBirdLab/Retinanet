@@ -2,6 +2,7 @@ experiments/
 __pycache__/
 .vscode/
 .ipynb_checkpoints/
+.ssh/
 
 results/
 results_*/

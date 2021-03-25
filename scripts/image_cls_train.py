@@ -46,7 +46,9 @@ parser.add_argument("--max_epoch", default=1, type=int)
 parser.add_argument("--train_percent", default=0.9, type=float)
 parser.add_argument("--use_p_of_data", default=0.5, type=float)
 
-parser.add_argument("--lr", default=0.01, type=float)
+parser.add_argument("--lr", default=3e-4, type=float)
+parser.add_argument("--lr_delta", default=1e-5, type=float)
+parser.add_argument("--weight_decay", default=0.01, type=float)
 
 parser.add_argument("--pretrained", default="", type=str)
 parser.add_argument("--pretrained_backend", action="store_true")
@@ -63,6 +65,14 @@ def create_directory(path):
     if not os.path.isdir(path):
         os.makedirs(path)
     return path
+
+
+def dump_results_dict(logs_dict, logs_path):
+    with open(logs_path, "w", encoding="utf-8") as f:
+        for key in logs_dict.keys():
+            f.write(
+                f"{key}_train : {logs_dict[key][0]:1.5f}  {key}_val : {logs_dict[key][1]:1.5f}\n"
+            )
 
 
 class Average_Meter:
@@ -101,9 +111,16 @@ def calculate_metrics(preds, labels):
     # false_positive = ((preds - labels) > 0).float().sum()
 
     acc = true_preds / total
-    percision = true_positive / max(total_predicted_positive, 1)
-    recall = true_positive / max(total_actual_positive, 1)
-    f1 = (2 * percision * recall) / max((percision + recall), 1)
+    percision = true_positive / torch.maximum(
+        total_predicted_positive,
+        torch.tensor([1, 1]).to(total_predicted_positive.device),
+    )
+    recall = true_positive / torch.maximum(
+        total_actual_positive, torch.tensor([1, 1]).to(total_actual_positive.device)
+    )
+    f1 = (2 * percision * recall) / torch.maximum(
+        (percision + recall), torch.tensor([1, 1]).to(percision.device)
+    )
 
     return acc[1], percision[1], recall[1], f1[1]
 
@@ -160,23 +177,34 @@ def _train(model, train_loader, val_loader):
 
     model.train()
     model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.Adam(
+        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+    )
     # optimizer = optim.SGD(
-    #     model.parameters(), lr=args.lr, momentum=0.9, weight_decay=0.01, nesterov=False
+    #     model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay, nesterov=False
     # )
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=epochs, eta_min=args.lr * 1e-5
+        optimizer, T_max=epochs, eta_min=args.lr * args.lr_delta
     )
 
-    writer = SummaryWriter(
-        os.path.join(args.log_dir, "logs/tensorboard"), filename_suffix=args.tag
+    train_writer = SummaryWriter(
+        os.path.join(args.log_dir, f"logs/tensorboard/{args.tag}/train"),
+        filename_suffix=args.tag,
+    )
+    val_writer = SummaryWriter(
+        os.path.join(args.log_dir, f"logs/tensorboard/{args.tag}/val"),
+        filename_suffix=args.tag,
     )
     train_meter = Average_Meter(
         ["loss", "image_classification_loss", "acc", "precision", "recall", "F1"]
     )
 
-    best_metric = 1000
-    for epoch in range(1, epochs):
+    logs_dict = {
+        "best_loss": [1000, 1000],
+        "best_acc": [-1, -1],
+        "best_f1": [-1, -1],
+    }
+    for epoch in range(0, epochs):
         for i_batch, (images, labels) in enumerate(train_loader):
 
             optimizer.zero_grad()
@@ -211,8 +239,8 @@ def _train(model, train_loader, val_loader):
                 }
             )
             iteration = epoch * len(train_loader) + i_batch
-            writer.add_scalar("Train/Losses/loss", loss.item(), iteration)
-            writer.add_scalar(
+            train_writer.add_scalar("Train/Losses/loss", loss.item(), iteration)
+            train_writer.add_scalar(
                 "Train/Losses/image_classification_loss",
                 losses["img_classification"].item(),
                 iteration,
@@ -229,37 +257,63 @@ def _train(model, train_loader, val_loader):
             )
 
         scheduler.step()
-        writer.add_scalar("HP/lr", optimizer.param_groups[0]["lr"], epoch)
+        train_writer.add_scalar("HP/lr", optimizer.param_groups[0]["lr"], epoch)
         ################################################################################
         # Evaluate
         ################################################################################
         loss, cls_loss, acc, precision, recall, f1 = evaluate(model, val_loader)
         tloss, tcls_loss, tacc, tprecision, trecall, tf1 = train_meter.get(clear=True)
 
-        writer.add_scalars("Evaluate/Losses/loss", {"train": tloss, "val": loss}, epoch)
-        writer.add_scalars(
+        train_writer.add_scalar("Evaluate/Losses/loss", tloss, epoch)
+        val_writer.add_scalar("Evaluate/Losses/loss", loss, epoch)
+        train_writer.add_scalar(
             "Evaluate/Losses/image_classification_loss",
-            {"train": tcls_loss, "val": cls_loss},
+            tcls_loss,
             epoch,
         )
-        writer.add_scalars(
+        val_writer.add_scalar(
+            "Evaluate/Losses/image_classification_loss",
+            cls_loss,
+            epoch,
+        )
+        train_writer.add_scalar(
             "Evaluate/Metrics/Accuracy",
-            {"train": tacc, "val": acc},
+            tacc,
             epoch,
         )
-        writer.add_scalars(
+        val_writer.add_scalar(
+            "Evaluate/Metrics/Accuracy",
+            acc,
+            epoch,
+        )
+        train_writer.add_scalar(
             "Evaluate/Metrics/Precision",
-            {"train": tprecision, "val": precision},
+            tprecision,
             epoch,
         )
-        writer.add_scalars(
+        val_writer.add_scalar(
+            "Evaluate/Metrics/Precision",
+            precision,
+            epoch,
+        )
+        train_writer.add_scalar(
             "Evaluate/Metrics/Recall",
-            {"train": trecall, "val": recall},
+            trecall,
             epoch,
         )
-        writer.add_scalars(
+        val_writer.add_scalar(
+            "Evaluate/Metrics/Recall",
+            recall,
+            epoch,
+        )
+        train_writer.add_scalar(
             "Evaluate/Metrics/F1",
-            {"train": tf1, "val": f1},
+            tf1,
+            epoch,
+        )
+        val_writer.add_scalar(
+            "Evaluate/Metrics/F1",
+            f1,
             epoch,
         )
         print(
@@ -272,14 +326,28 @@ def _train(model, train_loader, val_loader):
             )
         )
 
-        if loss < best_metric:
-            best_metric = loss
+        if tloss < logs_dict["best_loss"][0]:
+            logs_dict["best_loss"][0] = tloss
+        if tacc > logs_dict["best_acc"][0]:
+            logs_dict["best_acc"][0] = tacc
+        if tf1 > logs_dict["best_f1"][0]:
+            logs_dict["best_f1"][0] = tf1
+        if loss < logs_dict["best_loss"][1]:
+            logs_dict["best_loss"][1] = loss
             base_dir = os.path.join(args.log_dir, "checkpoints")
             create_directory(base_dir)
             torch.save(
                 model.state_dict(),
                 os.path.join(base_dir, f"best_chpt_{args.tag}.pth"),
             )
+        if acc > logs_dict["best_acc"][1]:
+            logs_dict["best_acc"][1] = acc
+        if f1 > logs_dict["best_f1"][1]:
+            logs_dict["best_f1"][1] = f1
+
+    dump_results_dict(
+        logs_dict, os.path.join(args.log_dir, f"logs/logs_dict_{args.tag}.txt")
+    )
 
     return model
 

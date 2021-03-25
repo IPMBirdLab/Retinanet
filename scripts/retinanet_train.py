@@ -42,7 +42,9 @@ parser.add_argument("--max_epoch", default=1, type=int)
 parser.add_argument("--train_percent", default=0.9, type=float)
 parser.add_argument("--use_p_of_data", default=0.5, type=float)
 
-parser.add_argument("--lr", default=0.01, type=float)
+parser.add_argument("--lr", default=3e-4, type=float)
+parser.add_argument("--lr_delta", default=1e-5, type=float)
+parser.add_argument("--weight_decay", default=0.01, type=float)
 
 parser.add_argument("--pretrained", default="", type=str)
 parser.add_argument("--pretrained_backend", action="store_true")
@@ -59,6 +61,14 @@ def create_directory(path):
     if not os.path.isdir(path):
         os.makedirs(path)
     return path
+
+
+def dump_results_dict(logs_dict, logs_path):
+    with open(logs_path, "w", encoding="utf-8") as f:
+        for key in logs_dict.keys():
+            f.write(
+                f"{key}_train : {logs_dict[key][0]:1.5f}  {key}_val : {logs_dict[key][1]:1.5f}\n"
+            )
 
 
 class Average_Meter:
@@ -128,6 +138,46 @@ def match_predictions(boxes, gt_boxes):
     return matched_pred_scores
 
 
+def _AP_metric(boxes, scores, labels, gt_boxes):
+    """Inspiered by:
+    https://github.com/pytorch/tnt/blob/master/torchnet/meter/apmeter.py
+    """
+    ap_list = []
+
+    for (
+        boxes_per_img,
+        scores_per_img,
+        labels_per_img,
+        gt_boxes_per_img,
+    ) in zip(boxes, scores, labels, gt_boxes):
+        if boxes_per_img.size(0) == 0:
+            ap_list.append(torch.zeros(1).to(boxes_per_img.device))
+            continue
+        keep = torchvision.ops.batched_nms(
+            boxes_per_img, scores_per_img, labels_per_img, 0.5
+        )
+        boxes_per_img, scores_per_img = (
+            boxes_per_img[keep],
+            scores_per_img[keep],
+        )
+
+        match_scores = match_predictions(boxes_per_img, gt_boxes_per_img)
+        _, match_indices = torch.sort(scores_per_img, dim=0, descending=True)
+        match_scores = match_scores[match_indices]
+        predicted_truth = torch.where(match_scores > 0.5, 1, 0).to(match_scores.device)
+
+        # compute the true-positive sums
+        tp = predicted_truth.float().cumsum(0)
+        # create ranks range
+        rg = torch.arange(1, tp.size(0) + 1).float().to(match_scores.device)
+        # compute precision curve
+        precision = tp.div(rg)
+        # compute average precision
+        ap = precision[match_scores.bool()].sum() / max(float(match_scores.sum()), 1)
+        ap_list.append(ap)
+    return ap_list
+
+
 def evaluate(model, loader):
     model.eval()
 
@@ -162,38 +212,8 @@ def evaluate(model, loader):
                 [lbl["labels"] for lbl in targets],
             )
 
-            for (
-                boxes_per_img,
-                scores_per_img,
-                labels_per_img,
-                gt_boxes_per_img,
-                gt_labels_per_img,
-            ) in zip(boxes, scores, labels, gt_boxes, gt_labels):
-                keep = torchvision.ops.batched_nms(
-                    boxes_per_img, scores_per_img, labels_per_img, 0.5
-                )
-                boxes_per_img, scores_per_img = (
-                    boxes_per_img[keep],
-                    scores_per_img[keep],
-                )
-
-                match_scores = match_predictions(boxes_per_img, gt_boxes_per_img)
-                _, match_indices = torch.sort(scores_per_img, dim=0, descending=True)
-                match_scores = match_scores[match_indices]
-                predicted_truth = torch.where(match_scores > 0.5, 1, 0).to(
-                    match_scores.device
-                )
-
-                # compute the true-positive sums
-                tp = predicted_truth.float().cumsum(0)
-                # create ranks range
-                rg = torch.arange(1, tp.size(0) + 1).float().to(match_scores.device)
-                # compute precision curve
-                precision = tp.div(rg)
-                # compute average precision
-                ap = precision[match_scores.bool()].sum() / max(
-                    float(match_scores.sum()), 1
-                )
+            ap_list = _AP_metric(boxes, scores, labels, gt_boxes)
+            for ap in ap_list:
                 ap_meter.add({"AP": ap.item()})
 
             val_meter.add(
@@ -214,23 +234,34 @@ def _train(model, train_loader, val_loader):
 
     model.train()
     model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.Adam(
+        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+    )
+    # optimizer = optim.SGD(
+    #     model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay, nesterov=False
+    # )
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=epochs, eta_min=args.lr * 1e-5
+        optimizer, T_max=epochs, eta_min=args.lr * args.lr_delta
     )
 
-    writer = SummaryWriter(
-        os.path.join(args.log_dir, "logs/tensorboard"), filename_suffix=args.tag
+    train_writer = SummaryWriter(
+        os.path.join(args.log_dir, f"logs/tensorboard/{args.tag}/train"),
+        filename_suffix="train_" + args.tag,
+    )
+    val_writer = SummaryWriter(
+        os.path.join(args.log_dir, f"logs/tensorboard/{args.tag}/val"),
+        filename_suffix="val_" + args.tag,
     )
     train_meter = Average_Meter(["loss", "classification_loss", "bbox_regression_loss"])
+    ap_meter = Average_Meter(["AP"])
 
-    best_metric = 1000
+    logs_dict = {"best_loss": [1000, 1000], "best_map": [-1, -1]}
     for epoch in range(1, epochs):
-        for i_batch, batch in enumerate(train_loader):
+        for i_batch, (images, targets) in enumerate(train_loader):
 
             optimizer.zero_grad()
 
-            losses, _ = model(*batch)
+            losses, _ = model(images, targets)
 
             loss = losses["classification"] + losses["bbox_regression"]
             loss.backward()
@@ -238,6 +269,28 @@ def _train(model, train_loader, val_loader):
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
 
             optimizer.step()
+
+            ################################################################################
+            # Metrics
+            ################################################################################
+            model.eval()
+            _, detections, _ = model(images, targets)
+            model.train()
+
+            boxes, scores, labels = (
+                [det["boxes"] for det in detections],
+                [det["scores"] for det in detections],
+                [det["labels"] for det in detections],
+            )
+
+            gt_boxes, gt_labels = (
+                [lbl["boxes"] for lbl in targets],
+                [lbl["labels"] for lbl in targets],
+            )
+
+            ap_list = _AP_metric(boxes, scores, labels, gt_boxes)
+            for ap in ap_list:
+                ap_meter.add({"AP": ap.item()})
 
             ################################################################################
             # Log
@@ -250,49 +303,72 @@ def _train(model, train_loader, val_loader):
                 }
             )
             iteration = epoch * len(train_loader) + i_batch
-            writer.add_scalar("Train/Losses/loss", loss.item(), iteration)
-            writer.add_scalar(
+            train_writer.add_scalar("Train/Losses/loss", loss.item(), iteration)
+            train_writer.add_scalar(
                 "Train/Losses/classification_loss",
                 losses["classification"].item(),
                 iteration,
             )
-            writer.add_scalar(
+            train_writer.add_scalar(
                 "Train/Losses/bbox_regression_loss",
                 losses["bbox_regression"].item(),
                 iteration,
             )
+            train_writer.add_scalar(
+                "Train/Metric/mAP",
+                ap_meter.get(),
+                iteration,
+            )
 
             print(
-                "Epoch: {} | batch: {} | Classification loss: {:1.5f} | Regression loss: {:1.5f} | Running loss: {:1.5f}".format(
+                "Epoch: {} | batch: {} | Classification loss: {:1.5f} | Regression loss: {:1.5f} | Running loss: {:1.5f} | mAP: {:.2f}".format(
                     epoch,
                     i_batch + 1,
                     float(losses["classification"].item()),
                     float(losses["bbox_regression"].item()),
                     float(loss.item()),
+                    float(ap_meter.get()),
                 )
             )
         scheduler.step()
-        writer.add_scalar("HP/lr", optimizer.param_groups[0]["lr"], epoch)
+        train_writer.add_scalar("HP/lr", optimizer.param_groups[0]["lr"], epoch)
         ################################################################################
         # Evaluate
         ################################################################################
         loss, cls_loss, bbox_loss, mAP = evaluate(model, val_loader)
         tloss, tcls_loss, tbbox_loss = train_meter.get(clear=True)
+        tmAP = ap_meter.get(clear=True)
 
-        writer.add_scalars("Evaluate/Losses/loss", {"train": tloss, "val": loss}, epoch)
-        writer.add_scalars(
+        train_writer.add_scalar("Evaluate/Losses/loss", tloss, epoch)
+        val_writer.add_scalar("Evaluate/Losses/loss", loss, epoch)
+        train_writer.add_scalar(
             "Evaluate/Losses/classification_loss",
-            {"train": tcls_loss, "val": cls_loss},
+            tcls_loss,
             epoch,
         )
-        writer.add_scalars(
+        val_writer.add_scalar(
+            "Evaluate/Losses/classification_loss",
+            cls_loss,
+            epoch,
+        )
+        train_writer.add_scalar(
             "Evaluate/Losses/bbox_regression_loss",
-            {"train": tbbox_loss, "val": bbox_loss},
+            tbbox_loss,
             epoch,
         )
-        writer.add_scalars(
+        val_writer.add_scalar(
+            "Evaluate/Losses/bbox_regression_loss",
+            bbox_loss,
+            epoch,
+        )
+        train_writer.add_scalar(
             "Evaluate/Metrics/mAP",
-            {"train": 0, "val": mAP},
+            tmAP,
+            epoch,
+        )
+        val_writer.add_scalar(
+            "Evaluate/Metrics/mAP",
+            mAP,
             epoch,
         )
         print(
@@ -301,14 +377,24 @@ def _train(model, train_loader, val_loader):
             )
         )
 
-        if loss < best_metric:
-            best_metric = loss
+        if tloss < logs_dict["best_loss"][0]:
+            logs_dict["best_loss"][0] = tloss
+        if tmAP > logs_dict["best_map"][0]:
+            logs_dict["best_map"][0] = tmAP
+        if loss < logs_dict["best_loss"][1]:
+            logs_dict["best_loss"][1] = loss
             base_dir = os.path.join(args.log_dir, "checkpoints")
             create_directory(base_dir)
             torch.save(
                 model.state_dict(),
                 os.path.join(base_dir, f"best_chpt_{args.tag}.pth"),
             )
+        if mAP > logs_dict["best_map"][1]:
+            logs_dict["best_map"][1] = mAP
+
+    dump_results_dict(
+        logs_dict, os.path.join(args.log_dir, f"logs/logs_dict_{args.tag}.txt")
+    )
 
     return model
 
