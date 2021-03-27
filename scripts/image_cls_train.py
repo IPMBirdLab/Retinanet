@@ -314,7 +314,7 @@ def _train(model, train_loader, val_loader):
             )
 
             if (iteration + 1) % args.accumulation_steps == 0:
-                # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()
