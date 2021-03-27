@@ -279,15 +279,15 @@ class RetinaNetImageClassificationHead(nn.Module):
         self.num_classes = num_classes
         self.num_features = num_features
 
-        for l in range(num_features):
-            self.__setattr__(
-                f"conv_{l + 1}",
-                nn.Conv2d(in_channels, num_classes, kernel_size=1, stride=1),
-            )
-            self.__setattr__(
-                f"bn_{l + 1}",
-                nn.BatchNorm2d(in_channels),
-            )
+#         for l in range(num_features):
+        self.__setattr__(
+            f"conv_{0}",
+            nn.Conv2d(in_channels, num_classes, kernel_size=1, stride=1),
+        )
+        self.__setattr__(
+            f"bn_{0}",
+            nn.BatchNorm2d(in_channels),
+        )
 
     def compute_loss(self, targets, head_outputs):
         device = next(self.parameters()).device
@@ -304,12 +304,13 @@ class RetinaNetImageClassificationHead(nn.Module):
 
     def forward(self, x):
         cls_logits_list = []
-        for i, features in enumerate(x):
-            cls_logits = self.__getattr__(f"bn_{i + 1}")(features)
-            cls_logits = self.__getattr__(f"conv_{i + 1}")(cls_logits)
-            cls_logits = F.max_pool2d(cls_logits, kernel_size=cls_logits.size()[-2:])
-            cls_logits = cls_logits.squeeze().unsqueeze(1)
-            cls_logits_list.append(cls_logits)
+#         for i, features in enumerate(x):
+        features = x[self.num_features-1]
+        cls_logits = self.__getattr__(f"bn_{0}")(features)
+        cls_logits = self.__getattr__(f"conv_{0}")(cls_logits)
+        cls_logits = F.max_pool2d(cls_logits, kernel_size=cls_logits.size()[-2:])
+        cls_logits = cls_logits.squeeze().unsqueeze(1)
+        cls_logits_list.append(cls_logits)
 
         return torch.max(torch.cat(cls_logits_list, 1), 1)[0]
         
