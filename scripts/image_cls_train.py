@@ -3,6 +3,7 @@ from torch import nn
 import torchvision
 from torch.utils.data import DataLoader, SubsetRandomSampler, Subset
 import torch.optim as optim
+from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.tensorboard import SummaryWriter
 
 from retinanet.model.detection import retinanet_resnet50_fpn
@@ -51,6 +52,7 @@ parser.add_argument("--opt", default="sgd", type=str)
 parser.add_argument("--lr", default=3e-4, type=float)
 parser.add_argument("--lr_delta", default=1e-5, type=float)
 parser.add_argument("--weight_decay", default=1e-4, type=float)
+parser.add_argument("--lr_warmup", default=1e-1, type=float)
 # SGD
 parser.add_argument("--momentum", default=0.9, type=float)
 parser.add_argument("--nesterov", action="store_true")
@@ -138,6 +140,74 @@ def outputs_to_logits(outputs):
     return nn.Sigmoid()(outputs)
 
 
+class GradualWarmupScheduler(_LRScheduler):
+    """Gradually warm-up(increasing) learning rate in optimizer.
+    Proposed in 'Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour'.
+
+    Note: Implementation is origially from :
+            https://github.com/ildoonet/pytorch-gradual-warmup-lr
+
+    Parameters
+    ----------
+    optimizer : torch.optim
+        Wrapped optimizer.
+    warmup_steps : int
+        warmup duration. target learning rate is reached at warmup_steps, gradually.
+    after_scheduler : _LRScheduler
+        after warmup_steps, use this scheduler(eg. ReduceLROnPlateau)
+    multiplier : float, optional
+        target learning rate = base lr * multiplier if multiplier > 1.0.
+        if multiplier = 1.0, lr starts from 0 and ends up with the base_lr, by default 1.0
+
+    Raises
+    ------
+    ValueError
+        multiplier should be greater thant or equal to 1.
+    """
+
+    def __init__(self, optimizer, warmup_steps, after_scheduler, multiplier=1.0):
+        self.multiplier = multiplier
+        if self.multiplier < 1.0:
+            raise ValueError("multiplier should be greater thant or equal to 1.")
+        self.warmup_steps = warmup_steps
+        self.after_scheduler = after_scheduler
+        self.finished = False
+        super(GradualWarmupScheduler, self).__init__(optimizer)
+
+    def get_lr(self):
+        if self.last_epoch > self.warmup_steps:
+            if self.after_scheduler:
+                if not self.finished:
+                    self.after_scheduler.base_lrs = [
+                        base_lr * self.multiplier for base_lr in self.base_lrs
+                    ]
+                    self.finished = True
+                return self.after_scheduler.get_last_lr()
+            return [base_lr * self.multiplier for base_lr in self.base_lrs]
+
+        if self.multiplier == 1.0:
+            return [
+                base_lr * (float(self.last_epoch) / self.warmup_steps)
+                for base_lr in self.base_lrs
+            ]
+        else:
+            return [
+                base_lr
+                * ((self.multiplier - 1.0) * self.last_epoch / self.warmup_steps + 1.0)
+                for base_lr in self.base_lrs
+            ]
+
+    def step(self, epoch=None, metrics=None):
+        if self.finished and self.after_scheduler:
+            if epoch is None:
+                self.after_scheduler.step(None)
+            else:
+                self.after_scheduler.step(epoch - self.warmup_steps)
+            self._last_lr = self.after_scheduler.get_last_lr()
+        else:
+            return super(GradualWarmupScheduler, self).step(epoch)
+
+
 def evaluate(model, loader):
     model.eval()
 
@@ -196,9 +266,15 @@ def _train(model, train_loader, val_loader):
             nesterov=args.nesterov,
         )
 
+    total_steps = (epochs * len(train_loader)) // args.accumulation_steps
+
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=epochs, eta_min=args.lr * args.lr_delta
+        optimizer, T_max=total_steps, eta_min=args.lr * args.lr_delta
     )
+    if args.lr_warmup != -1:
+        scheduler = GradualWarmupScheduler(
+            optimizer, total_steps * args.lr_warmup, scheduler
+        )
 
     train_writer = SummaryWriter(
         os.path.join(args.log_dir, f"logs/tensorboard/{args.tag}/train"),
@@ -241,6 +317,7 @@ def _train(model, train_loader, val_loader):
                 # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
                 optimizer.step()
                 optimizer.zero_grad()
+                scheduler.step()
 
             # log model metrics after each backprop step
             if (iteration + 1) % args.accumulation_steps == 1:
@@ -278,6 +355,12 @@ def _train(model, train_loader, val_loader):
                     iteration // args.accumulation_steps,
                 )
 
+                train_writer.add_scalar(
+                    "HP/lr",
+                    optimizer.param_groups[0]["lr"],
+                    iteration // args.accumulation_steps,
+                )
+
                 print(
                     "Epoch: {} | batch: {}/{:.2f}% | Image Classification loss: {:1.5f} | Running loss: {:1.5f}".format(
                         epoch,
@@ -290,8 +373,6 @@ def _train(model, train_loader, val_loader):
                 loss_value_dict["loss"] = 0
                 loss_value_dict["img_classification"] = 0
 
-        scheduler.step()
-        train_writer.add_scalar("HP/lr", optimizer.param_groups[0]["lr"], epoch)
         ################################################################################
         # Evaluate
         ################################################################################
