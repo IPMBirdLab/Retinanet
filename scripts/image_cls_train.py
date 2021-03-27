@@ -41,14 +41,19 @@ parser.add_argument("--num_workers", default=1, type=int)
 # Hyperparameter
 ###############################################################################
 parser.add_argument("--batch_size", default=2, type=int)
+parser.add_argument("--accumulation_steps", default=1, type=int)
 parser.add_argument("--val_batch_size", default=None, type=int)
 parser.add_argument("--max_epoch", default=1, type=int)
 parser.add_argument("--train_percent", default=0.9, type=float)
 parser.add_argument("--use_p_of_data", default=0.5, type=float)
 
+parser.add_argument("--opt", default="sgd", type=str)
 parser.add_argument("--lr", default=3e-4, type=float)
 parser.add_argument("--lr_delta", default=1e-5, type=float)
-parser.add_argument("--weight_decay", default=0.01, type=float)
+parser.add_argument("--weight_decay", default=1e-4, type=float)
+# SGD
+parser.add_argument("--momentum", default=0.9, type=float)
+parser.add_argument("--nesterov", action="store_true")
 
 parser.add_argument("--pretrained", default="", type=str)
 parser.add_argument("--pretrained_backend", action="store_true")
@@ -177,12 +182,20 @@ def _train(model, train_loader, val_loader):
 
     model.train()
     model.to(device)
-    optimizer = optim.Adam(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
-    )
-    # optimizer = optim.SGD(
-    #     model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay, nesterov=False
-    # )
+
+    if args.opt == "adam":
+        optimizer = optim.Adam(
+            model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+        )
+    elif args.opt == "sgd":
+        optimizer = optim.SGD(
+            model.parameters(),
+            lr=args.lr,
+            momentum=args.momentum,
+            weight_decay=args.weight_decay,
+            nesterov=args.nesterov,
+        )
+
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=epochs, eta_min=args.lr * args.lr_delta
     )
@@ -204,57 +217,78 @@ def _train(model, train_loader, val_loader):
         "best_acc": [-1, -1],
         "best_f1": [-1, -1],
     }
+
+    loss_value_dict = {"loss": 0, "img_classification": 0}
+
     for epoch in range(0, epochs):
         for i_batch, (images, labels) in enumerate(train_loader):
-
-            optimizer.zero_grad()
+            iteration = epoch * len(train_loader) + i_batch
 
             losses, cls_outputs = model(images, labels)
 
             # loss = losses["classification"] + losses["bbox_regression"]
-            loss = losses["img_classification"]
+            # Normalize our loss (if averaged)
+            loss = losses["img_classification"] / args.accumulation_steps
+
             loss.backward()
 
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
-
-            optimizer.step()
-
-            ################################################################################
-            # Log
-            ################################################################################
-            predicted = logits_to_preds(outputs_to_logits(cls_outputs))
-            labels = torch.cat(
-                list(map(lambda x: x["img_cls_labels"].unsqueeze(0), labels)), 0
-            )
-            acc, precision, recall, f1 = calculate_metrics(predicted.detach(), labels)
-
-            train_meter.add(
-                {
-                    "loss": loss.item(),
-                    "image_classification_loss": losses["img_classification"].item(),
-                    "acc": acc.item(),
-                    "precision": precision.item(),
-                    "recall": recall.item(),
-                    "F1": f1.item(),
-                }
-            )
-            iteration = epoch * len(train_loader) + i_batch
-            train_writer.add_scalar("Train/Losses/loss", loss.item(), iteration)
-            train_writer.add_scalar(
-                "Train/Losses/image_classification_loss",
-                losses["img_classification"].item(),
-                iteration,
+            loss_value_dict["loss"] += loss.item()
+            loss_value_dict["img_classification"] += (
+                losses["img_classification"].item() / args.accumulation_steps
             )
 
-            print(
-                "Epoch: {} | batch: {}/{:.2f}% | Image Classification loss: {:1.5f} | Running loss: {:1.5f}".format(
-                    epoch,
-                    i_batch + 1,
-                    ((i_batch + 1) / len(train_loader)) * 100,
-                    float(losses["img_classification"].item()),
-                    float(loss.item()),
+            if (iteration + 1) % args.accumulation_steps == 0:
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
+                optimizer.step()
+                optimizer.zero_grad()
+
+            # log model metrics after each backprop step
+            if (iteration + 1) % args.accumulation_steps == 1:
+                ################################################################################
+                # Log
+                ################################################################################
+                predicted = logits_to_preds(outputs_to_logits(cls_outputs))
+                labels = torch.cat(
+                    list(map(lambda x: x["img_cls_labels"].unsqueeze(0), labels)), 0
                 )
-            )
+                acc, precision, recall, f1 = calculate_metrics(
+                    predicted.detach(), labels
+                )
+
+                train_meter.add(
+                    {
+                        "loss": loss_value_dict["loss"],
+                        "image_classification_loss": loss_value_dict[
+                            "img_classification"
+                        ],
+                        "acc": acc.item(),
+                        "precision": precision.item(),
+                        "recall": recall.item(),
+                        "F1": f1.item(),
+                    }
+                )
+                train_writer.add_scalar(
+                    "Train/Losses/loss",
+                    loss_value_dict["loss"],
+                    iteration // args.accumulation_steps,
+                )
+                train_writer.add_scalar(
+                    "Train/Losses/image_classification_loss",
+                    loss_value_dict["img_classification"],
+                    iteration // args.accumulation_steps,
+                )
+
+                print(
+                    "Epoch: {} | batch: {}/{:.2f}% | Image Classification loss: {:1.5f} | Running loss: {:1.5f}".format(
+                        epoch,
+                        i_batch + 1,
+                        ((i_batch + 1) / len(train_loader)) * 100,
+                        float(losses["img_classification"].item()),
+                        float(loss.item()),
+                    )
+                )
+                loss_value_dict["loss"] = 0
+                loss_value_dict["img_classification"] = 0
 
         scheduler.step()
         train_writer.add_scalar("HP/lr", optimizer.param_groups[0]["lr"], epoch)
