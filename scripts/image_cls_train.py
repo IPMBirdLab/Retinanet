@@ -313,14 +313,18 @@ def _train(model, train_loader, val_loader):
                 losses["img_classification"].item() / args.accumulation_steps
             )
 
-            if (iteration + 1) % args.accumulation_steps == 0:
+            if (
+                iteration + 1
+            ) % args.accumulation_steps == 0 or args.accumulation_steps == 1:
                 # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()
 
             # log model metrics after each backprop step
-            if (iteration + 1) % args.accumulation_steps == 1:
+            if (
+                iteration + 1
+            ) % args.accumulation_steps == 1 or args.accumulation_steps == 1:
                 ################################################################################
                 # Log
                 ################################################################################
