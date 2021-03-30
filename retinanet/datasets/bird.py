@@ -2,11 +2,13 @@ import os
 import cv2
 import glob
 import random
+import json
 from PIL import Image
 import xml.dom.minidom
 import torch
 from torch.utils.data import Dataset
 from .utils import one_hot_embedding
+from ..utils import create_directory
 
 
 class BirdDetection(Dataset):
@@ -66,33 +68,90 @@ class BirdDetection(Dataset):
 
 
 class BirdClassification(Dataset):
-    def __init__(self, root_dir, transform=None):
-        self.root_dir = root_dir
+    def __init__(self, root_dir=None, transform=None):
+        if root_dir is not None:
+            self.init_dataset(root_dir)
+
         self.transform = transform
-
-        def get_image_list(root_dir):
-            image_path_list = []
-            for directory in os.listdir(root_dir):
-                root = os.path.join(root_dir, directory)
-                for file in glob.glob(os.path.join(root, "*.png")):
-                    image_path_list.append(os.path.join(root, file))
-            return image_path_list
-
-        self.root_dir = root_dir
-
-        self.foreground_dir = os.path.join(self.root_dir, "1")
-        self.background_dir = os.path.join(self.root_dir, "0")
-
-        self.image_path_list = get_image_list(self.foreground_dir)
-        self.positive_instances = len(self.image_path_list)
-        self.image_path_list += get_image_list(self.background_dir)
-        self.negative_instances = len(self.image_path_list) - self.positive_instances
-        random.shuffle(self.image_path_list)
 
         self.class_dic = {"bg": 0, "fg": 1}
         self.classes = 2
 
         self.image_size = None
+
+    def init_dataset(self, root_dir):
+        self.root_dir = root_dir
+
+        self.foreground_dir = os.path.join(self.root_dir, "1")
+        self.background_dir = os.path.join(self.root_dir, "0")
+
+        self.image_path_list = self._get_image_list(self.foreground_dir)
+        positive_instances = len(self.image_path_list)
+        self.image_path_list += self._get_image_list(self.background_dir)
+        negative_instances = len(self.image_path_list) - positive_instances
+        random.shuffle(self.image_path_list)
+
+    def _get_image_list(self, root_dir):
+        image_path_list = []
+        for directory in os.listdir(root_dir):
+            root = os.path.join(root_dir, directory)
+            for file in glob.glob(os.path.join(root, "*.png")):
+                image_path_list.append(os.path.join(root, file))
+        return image_path_list
+
+    def get_state_dict(self):
+        return {
+            "image_path_list": self.image_path_list,
+            "root_dir": self.root_dir,
+            "fdir": self.foreground_dir,
+            "bdir": self.background_dir,
+        }
+
+    def set_state_dict(self, state_dict):
+        self.image_path_list = state_dict["image_path_list"]
+        self.root_dir = state_dict["root_dir"]
+        self.foreground_dir = state_dict["fdir"]
+        self.background_dir = state_dict["bdir"]
+
+    def load_state_dict(self, path):
+        with open(path, "r", encoding="utf-8") as f:
+            json_srialized = f.read()
+            state_dict = json.loads(json_srialized)
+
+            self.set_state_dict(state_dict)
+
+            return state_dict
+
+    def save_state_dict(self, path, state_dict=None):
+        if state_dict is None:
+            state_dict = self.get_state_dict()
+        json_serialized = json.dumps(state_dict)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json_serialized)
+
+    def save(self, path, file_name=None):
+        if file_name is None:
+            file_name = "state_dict"
+        create_directory(path)
+        self.save_state_dict(os.path.join(path, f"{file_name}.json"))
+
+    def load(self, path, file_name=None):
+        if file_name is None:
+            file_name = "state_dict"
+        st_path = os.path.join(path, f"{file_name}.json")
+        if not os.path.exists(st_path):
+            return False
+        self.load_state_dict(st_path)
+        return True
+
+    def subset(self, indices):
+        st_dict = self.get_state_dict()
+        st_dict["image_path_list"] = [
+            st_dict["image_path_list"][idx] for idx in indices
+        ]
+        new_subset = BirdClassification()
+        new_subset.set_state_dict(st_dict)
+        return new_subset
 
     def __len__(self):
         return len(self.image_path_list)

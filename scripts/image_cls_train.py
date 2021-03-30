@@ -11,6 +11,7 @@ from retinanet.datasets.transforms import Compose, Normalize, ToTensor
 from retinanet.datasets.bird import BirdClassification
 from retinanet.datasets.utils import train_val_split, TransformDatasetWrapper
 
+from retinanet.utils import create_directory
 from retinanet.utils.gpu_profile import gpu_profile
 
 import os
@@ -36,6 +37,7 @@ parser = argparse.ArgumentParser()
 # Dataset
 ###############################################################################
 parser.add_argument("--data_dir", default="../../dataset", type=str)
+parser.add_argument("--load_from_json", action="store_true")
 parser.add_argument("--num_workers", default=1, type=int)
 
 ###############################################################################
@@ -66,12 +68,6 @@ args = parser.parse_args()
 if args.val_batch_size is None:
     args.val_batch_size = args.batch_size
 ###################################################################################
-
-
-def create_directory(path):
-    if not os.path.isdir(path):
-        os.makedirs(path)
-    return path
 
 
 def dump_results_dict(logs_dict, logs_path):
@@ -482,19 +478,33 @@ if __name__ == "__main__":
         ]
     )
 
-    dataset = BirdClassification(root_dir=args.data_dir)
+    data_log_dir = os.path.join(args.log_dir, "dataset")
+    if args.load_from_json:
+        dataset = BirdClassification()
+        train_dataset = BirdClassification()
+        train_dataset.load(data_log_dir, file_name="train")
+        val_dataset = BirdClassification()
+        val_dataset.load(data_log_dir, file_name="validation")
+    else:
+        dataset = BirdClassification(root_dir=args.data_dir)
 
-    train_idx, valid_idx = train_val_split(
-        dataset, p=args.train_percent, use_p_of_data=args.use_p_of_data
-    )
+        train_idx, valid_idx = train_val_split(
+            dataset, p=args.train_percent, use_p_of_data=args.use_p_of_data
+        )
 
-    train_dataset = Subset(TransformDatasetWrapper(dataset, train_transform), train_idx)
-    val_dataset = Subset(TransformDatasetWrapper(dataset, train_transform), valid_idx)
+        train_dataset = dataset.subset(train_idx)
+        val_dataset = dataset.subset(valid_idx)
 
-    print(f"\nDataset size :     {len(dataset)}")
-    print(f"Training subset:     {len(train_dataset)}")
-    print(f"Validation subset:   {len(val_dataset)}")
-    print(f"\nBatches per epoch: {len(train_dataset)//args.batch_size}")
+        train_dataset.save(data_log_dir, file_name="train")
+        val_dataset.save(data_log_dir, file_name="validation")
+
+        print(f"\nDataset size :     {len(dataset)}")
+        print(f"Training subset:     {len(train_dataset)}")
+        print(f"Validation subset:   {len(val_dataset)}")
+        print(f"\nBatches per epoch: {len(train_dataset)//args.batch_size}")
+
+    train_dataset = TransformDatasetWrapper(train_dataset, train_transform)
+    val_dataset = TransformDatasetWrapper(val_dataset, train_transform)
 
     train_loader = DataLoader(
         dataset=train_dataset,
