@@ -7,6 +7,7 @@ from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.tensorboard import SummaryWriter
 
 from retinanet.model.detection import retinanet_resnet50_fpn
+from retinanet.model.utils import outputs_to_logits, logits_to_preds
 from retinanet.datasets.transforms import Compose, Normalize, ToTensor
 from retinanet.datasets.bird import BirdClassification
 from retinanet.datasets.utils import train_val_split, TransformDatasetWrapper
@@ -126,14 +127,6 @@ def calculate_metrics(preds, labels):
     )
 
     return acc[1], percision[1], recall[1], f1[1]
-
-
-def logits_to_preds(logits):
-    return (logits > 0.5).float()
-
-
-def outputs_to_logits(outputs):
-    return nn.Sigmoid()(outputs)
 
 
 class GradualWarmupScheduler(_LRScheduler):

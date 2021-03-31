@@ -299,6 +299,8 @@ class RetinaNetImageClassificationHead(nn.Module):
         class_loss_fn = nn.MultiLabelSoftMarginLoss().to(device)
         
         cls_logits = head_outputs["img_classification"]
+        if len(cls_logits.size()) < 2:
+            cls_logits = cls_logits.unsqueeze(0)
         cls_labels = torch.cat(list(map(lambda x: x["img_cls_labels"].unsqueeze(0), targets)), 0)
 
         return class_loss_fn(cls_logits, cls_labels.float())
