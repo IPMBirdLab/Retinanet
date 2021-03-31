@@ -12,11 +12,65 @@ from ..utils import create_directory
 
 
 class BirdDetection(Dataset):
-    def __init__(self, image_dir="./data", annotations_dir="./ann", transform=None):
-        self.files_name = os.listdir(image_dir)
-        self.image_dir = image_dir
-        self.annotaions_dir = annotations_dir
+    def __init__(self, images_dir=None, annotations_dir=None, transform=None):
+        if images_dir is not None or annotations_dir is not None:
+            self.init_dataset(images_dir, annotations_dir)
+
         self.transforms = transform
+
+    def init_dataset(self, images_dir="./data", annotations_dir="./ann"):
+        self.files_name = os.listdir(images_dir)
+        self.images_dir = images_dir
+        self.annotaions_dir = annotations_dir
+
+    def get_state_dict(self):
+        return {
+            "files_name": self.files_name,
+            "images_dir": self.images_dir,
+            "annotations_dir": self.annotaions_dir,
+        }
+
+    def set_state_dict(self, state_dict):
+        self.files_name = state_dict["files_name"]
+        self.images_dir = state_dict["images_dir"]
+        self.annotaions_dir = state_dict["annotations_dir"]
+
+    def load_state_dict(self, path):
+        with open(path, "r", encoding="utf-8") as f:
+            json_srialized = f.read()
+            state_dict = json.loads(json_srialized)
+
+            self.set_state_dict(state_dict)
+
+            return state_dict
+
+    def save_state_dict(self, path, state_dict=None):
+        if state_dict is None:
+            state_dict = self.get_state_dict()
+        json_serialized = json.dumps(state_dict)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json_serialized)
+
+    def save(self, path, file_name=None):
+        if file_name is None:
+            file_name = "state_dict"
+        create_directory(path)
+        self.save_state_dict(os.path.join(path, f"{file_name}.json"))
+
+    def load(self, path, file_name=None):
+        if file_name is None:
+            file_name = "state_dict"
+        st_path = os.path.join(path, f"{file_name}.json")
+        if not os.path.exists(st_path):
+            raise FileNotFoundError
+        self.load_state_dict(st_path)
+
+    def subset(self, indices):
+        st_dict = self.get_state_dict()
+        st_dict["files_name"] = [st_dict["files_name"][idx] for idx in indices]
+        new_subset = BirdDetection()
+        new_subset.set_state_dict(st_dict)
+        return new_subset
 
     def __len__(self):
         return len(self.files_name)
@@ -26,7 +80,7 @@ class BirdDetection(Dataset):
             idx = idx.tolist()
 
         file_name, _ = os.path.splitext(self.files_name[idx])
-        img_path = os.path.join(self.image_dir, file_name + ".png")
+        img_path = os.path.join(self.images_dir, file_name + ".png")
         xml_path = os.path.join(self.annotaions_dir, file_name + ".xml")
 
         img = cv2.imread(img_path)
@@ -60,7 +114,8 @@ class BirdDetection(Dataset):
 
         return res
 
-    def collate_fn(self, batch):
+    @staticmethod
+    def collate_fn(batch):
         imgs = [item[0] for item in batch]
         trgts = [item[1] for item in batch]
 
@@ -140,9 +195,8 @@ class BirdClassification(Dataset):
             file_name = "state_dict"
         st_path = os.path.join(path, f"{file_name}.json")
         if not os.path.exists(st_path):
-            return False
+            raise FileNotFoundError
         self.load_state_dict(st_path)
-        return True
 
     def subset(self, indices):
         st_dict = self.get_state_dict()
@@ -183,7 +237,8 @@ class BirdClassification(Dataset):
 
         return image, {"img_cls_labels": label}
 
-    def collate_fn(self, batch):
+    @staticmethod
+    def collate_fn(batch):
         imgs = [item[0] for item in batch]
         trgts = [item[1] for item in batch]
 

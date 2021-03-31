@@ -480,11 +480,10 @@ if __name__ == "__main__":
 
     data_log_dir = os.path.join(args.log_dir, "dataset")
     if args.load_from_json:
-        dataset = BirdClassification()
         train_dataset = BirdClassification()
-        train_dataset.load(data_log_dir, file_name="train")
+        train_dataset.load(data_log_dir, file_name="train_cls")
         val_dataset = BirdClassification()
-        val_dataset.load(data_log_dir, file_name="validation")
+        val_dataset.load(data_log_dir, file_name="validation_cls")
     else:
         dataset = BirdClassification(root_dir=args.data_dir)
 
@@ -495,13 +494,14 @@ if __name__ == "__main__":
         train_dataset = dataset.subset(train_idx)
         val_dataset = dataset.subset(valid_idx)
 
-        train_dataset.save(data_log_dir, file_name="train")
-        val_dataset.save(data_log_dir, file_name="validation")
+        train_dataset.save(data_log_dir, file_name="train_cls")
+        val_dataset.save(data_log_dir, file_name="validation_cls")
 
         print(f"\nDataset size :     {len(dataset)}")
-        print(f"Training subset:     {len(train_dataset)}")
-        print(f"Validation subset:   {len(val_dataset)}")
-        print(f"\nBatches per epoch: {len(train_dataset)//args.batch_size}")
+
+    print(f"Training subset:     {len(train_dataset)}")
+    print(f"Validation subset:   {len(val_dataset)}")
+    print(f"\nBatches per epoch: {len(train_dataset)//args.batch_size}")
 
     train_dataset = TransformDatasetWrapper(train_dataset, train_transform)
     val_dataset = TransformDatasetWrapper(val_dataset, train_transform)
@@ -511,7 +511,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         num_workers=0 if device_str == "cuda" else args.num_workers,
         # pin_memory=True if device_str == "cuda" else False,
-        collate_fn=dataset.collate_fn,
+        collate_fn=BirdClassification.collate_fn,
         drop_last=True,
         shuffle=True,
     )
@@ -521,7 +521,7 @@ if __name__ == "__main__":
         batch_size=args.val_batch_size,
         num_workers=0 if device_str == "cuda" else args.num_workers,
         # pin_memory=True if device_str == "cuda" else False,
-        collate_fn=dataset.collate_fn,
+        collate_fn=BirdClassification.collate_fn,
         drop_last=True,
         shuffle=False,
     )

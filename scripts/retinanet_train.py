@@ -31,6 +31,7 @@ parser = argparse.ArgumentParser()
 # Dataset
 ###############################################################################
 parser.add_argument("--data_dir", default="../../dataset", type=str)
+parser.add_argument("--load_from_json", action="store_true")
 parser.add_argument("--num_workers", default=1, type=int)
 
 ###############################################################################
@@ -52,6 +53,7 @@ parser.add_argument("--pretrained_backend", action="store_true")
 parser.add_argument("--log_dir", default="experiments", type=str)
 parser.add_argument("--tag", default="", type=str)
 args = parser.parse_args()
+
 if args.val_batch_size is None:
     args.val_batch_size = args.batch_size
 ###################################################################################
@@ -407,31 +409,42 @@ if __name__ == "__main__":
         ]
     )
 
-    dataset = BirdDetection(
-        image_dir=os.path.join(args.data_dir, "data"),
-        annotations_dir=os.path.join(args.data_dir, "ann"),
-    )
+    data_log_dir = os.path.join(args.log_dir, "dataset")
+    if args.load_from_json:
+        dataset = BirdDetection()
+        train_dataset = BirdDetection()
+        train_dataset.load(data_log_dir, file_name="train_detection")
+        val_dataset = BirdDetection()
+        val_dataset.load(data_log_dir, file_name="validation_detection")
+    else:
+        dataset = BirdDetection(
+            images_dir=os.path.join(args.data_dir, "data"),
+            annotations_dir=os.path.join(args.data_dir, "ann"),
+        )
 
-    train_idx, valid_idx = train_val_split(
-        dataset, p=args.train_percent, use_p_of_data=args.use_p_of_data
-    )
+        train_idx, valid_idx = train_val_split(
+            dataset, p=args.train_percent, use_p_of_data=args.use_p_of_data
+        )
 
-    # train_sampler = SubsetRandomSampler(train_idx)
-    # valid_sampler = SubsetRandomSampler(valid_idx)
+        train_dataset = dataset.subset(train_idx)
+        val_dataset = dataset.subset(valid_idx)
 
-    train_dataset = Subset(TransformDatasetWrapper(dataset, train_transform), train_idx)
-    val_dataset = Subset(TransformDatasetWrapper(dataset, train_transform), valid_idx)
+        train_dataset.save(data_log_dir, file_name="train_detection")
+        val_dataset.save(data_log_dir, file_name="validation_detection")
 
-    print(f"\nDataset size :   {len(dataset)}")
-    print(f"Training subset:   {len(train_dataset)}")
-    print(f"Validation subset: {len(val_dataset)}")
+        print(f"\nDataset size :   {len(dataset)}")
+        print(f"Training subset:   {len(train_dataset)}")
+        print(f"Validation subset: {len(val_dataset)}")
+
+    train_dataset = TransformDatasetWrapper(train_dataset, train_transform)
+    val_dataset = TransformDatasetWrapper(val_dataset, train_transform)
 
     train_loader = DataLoader(
         dataset=train_dataset,
         batch_size=args.batch_size,
         num_workers=0 if device_str == "cuda" else args.num_workers,
         # pin_memory=True if device_str == "cuda" else False,
-        collate_fn=dataset.collate_fn,
+        collate_fn=BirdDetection.collate_fn,
         drop_last=True,
         shuffle=True,
     )
@@ -441,7 +454,7 @@ if __name__ == "__main__":
         batch_size=args.val_batch_size,
         num_workers=0 if device_str == "cuda" else args.num_workers,
         # pin_memory=True if device_str == "cuda" else False,
-        collate_fn=dataset.collate_fn,
+        collate_fn=BirdDetection.collate_fn,
         shuffle=False,
     )
 
