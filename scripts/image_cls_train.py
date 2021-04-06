@@ -8,7 +8,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from retinanet.model.detection import retinanet_resnet50_fpn
 from retinanet.model.utils import outputs_to_logits, logits_to_preds
-from retinanet.datasets.transforms import Compose, Normalize, ToTensor
+from retinanet.datasets.transforms import Compose, Normalize, ToTensor, RandAugment
 from retinanet.datasets.bird import BirdClassification
 from retinanet.datasets.utils import train_val_split, TransformDatasetWrapper
 
@@ -464,12 +464,18 @@ if __name__ == "__main__":
     # for GPU memory trace
     # sys.settrace(gpu_profile)
 
-    train_transform = Compose(
-        [
-            ToTensor(device),
-            Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ]
-    )
+    val_transform = [
+        ToTensor(device),
+        Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ]
+
+    train_transform = [RandAugment(5, 30)] + val_transform
+
+    val_transform = Compose(val_transform)
+    train_transform = Compose(train_transform)
+
+    print("train transform", train_transform)
+    print("validation transform", val_transform)
 
     data_log_dir = os.path.join(args.log_dir, "dataset")
     if args.load_from_json:
@@ -497,7 +503,7 @@ if __name__ == "__main__":
     print(f"\nBatches per epoch: {len(train_dataset)//args.batch_size}")
 
     train_dataset = TransformDatasetWrapper(train_dataset, train_transform)
-    val_dataset = TransformDatasetWrapper(val_dataset, train_transform)
+    val_dataset = TransformDatasetWrapper(val_dataset, val_transform)
 
     train_loader = DataLoader(
         dataset=train_dataset,
@@ -526,6 +532,7 @@ if __name__ == "__main__":
         num_classes=2,
         pretrained=args.pretrained_backend,
         pretrained_backbone=args.pretrained_backend,
+        trainable_backbone_layers=5,
     )
 
     if args.pretrained != "":
