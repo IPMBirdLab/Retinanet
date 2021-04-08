@@ -13,21 +13,30 @@ from .roi_heads import paste_masks_in_image
 def _resize_image_and_masks_onnx(image, self_min_size, self_max_size, target):
     # type: (Tensor, float, float, Optional[Dict[str, Tensor]]) -> Tuple[Tensor, Optional[Dict[str, Tensor]]]
     from torch.onnx import operators
+
     im_shape = operators.shape_as_tensor(image)[-2:]
     min_size = torch.min(im_shape).to(dtype=torch.float32)
     max_size = torch.max(im_shape).to(dtype=torch.float32)
     scale_factor = torch.min(self_min_size / min_size, self_max_size / max_size)
 
     image = torch.nn.functional.interpolate(
-        image[None], scale_factor=scale_factor, mode='bilinear', recompute_scale_factor=True,
-        align_corners=False)[0]
+        image[None],
+        scale_factor=scale_factor,
+        mode="bilinear",
+        recompute_scale_factor=True,
+        align_corners=False,
+    )[0]
 
     if target is None:
         return image, target
 
     if "masks" in target:
         mask = target["masks"]
-        mask = F.interpolate(mask[:, None].float(), scale_factor=scale_factor, recompute_scale_factor=True)[:, 0].byte()
+        mask = F.interpolate(
+            mask[:, None].float(),
+            scale_factor=scale_factor,
+            recompute_scale_factor=True,
+        )[:, 0].byte()
         target["masks"] = mask
     return image, target
 
@@ -41,15 +50,23 @@ def _resize_image_and_masks(image, self_min_size, self_max_size, target):
     if max_size * scale_factor > self_max_size:
         scale_factor = self_max_size / max_size
     image = torch.nn.functional.interpolate(
-        image[None], scale_factor=scale_factor, mode='bilinear', recompute_scale_factor=True,
-        align_corners=False)[0]
+        image[None],
+        scale_factor=scale_factor,
+        mode="bilinear",
+        recompute_scale_factor=True,
+        align_corners=False,
+    )[0]
 
     if target is None:
         return image, target
 
     if "masks" in target:
         mask = target["masks"]
-        mask = F.interpolate(mask[:, None].float(), scale_factor=scale_factor, recompute_scale_factor=True)[:, 0].byte()
+        mask = F.interpolate(
+            mask[:, None].float(),
+            scale_factor=scale_factor,
+            recompute_scale_factor=True,
+        )[:, 0].byte()
         target["masks"] = mask
     return image, target
 
@@ -75,10 +92,11 @@ class GeneralizedRCNNTransform(nn.Module):
         self.image_mean = image_mean
         self.image_std = image_std
 
-    def forward(self,
-                images,       # type: List[Tensor]
-                targets=None  # type: Optional[List[Dict[str, Tensor]]]
-                ):
+    def forward(
+        self,
+        images,  # type: List[Tensor]
+        targets=None,  # type: Optional[List[Dict[str, Tensor]]]
+    ):
         # type: (...) -> Tuple[ImageList, Optional[List[Dict[str, Tensor]]]]
         images = [img for img in images]
         if targets is not None:
@@ -98,8 +116,10 @@ class GeneralizedRCNNTransform(nn.Module):
             target_index = targets[i] if targets is not None else None
 
             if image.dim() != 3:
-                raise ValueError("images is expected to be a list of 3d tensors "
-                                 "of shape [C, H, W], got {}".format(image.shape))
+                raise ValueError(
+                    "images is expected to be a list of 3d tensors "
+                    "of shape [C, H, W], got {}".format(image.shape)
+                )
             image = self.normalize(image)
             image, target_index = self.resize(image, target_index)
             images[i] = image
@@ -134,7 +154,7 @@ class GeneralizedRCNNTransform(nn.Module):
         TorchScript. Remove if https://github.com/pytorch/pytorch/issues/25803
         is fixed.
         """
-        index = int(torch.empty(1).uniform_(0., float(len(k))).item())
+        index = int(torch.empty(1).uniform_(0.0, float(len(k))).item())
         return k[index]
 
     def resize(self, image, target):
@@ -146,9 +166,13 @@ class GeneralizedRCNNTransform(nn.Module):
             # FIXME assume for now that testing uses the largest scale
             size = float(self.min_size[-1])
         if torchvision._is_tracing():
-            image, target = _resize_image_and_masks_onnx(image, size, float(self.max_size), target)
+            image, target = _resize_image_and_masks_onnx(
+                image, size, float(self.max_size), target
+            )
         else:
-            image, target = _resize_image_and_masks(image, size, float(self.max_size), target)
+            image, target = _resize_image_and_masks(
+                image, size, float(self.max_size), target
+            )
 
         if target is None:
             return image, target
@@ -170,11 +194,17 @@ class GeneralizedRCNNTransform(nn.Module):
         # type: (List[Tensor], int) -> Tensor
         max_size = []
         for i in range(images[0].dim()):
-            max_size_i = torch.max(torch.stack([img.shape[i] for img in images]).to(torch.float32)).to(torch.int64)
+            max_size_i = torch.max(
+                torch.stack([img.shape[i] for img in images]).to(torch.float32)
+            ).to(torch.int64)
             max_size.append(max_size_i)
         stride = size_divisible
-        max_size[1] = (torch.ceil((max_size[1].to(torch.float32)) / stride) * stride).to(torch.int64)
-        max_size[2] = (torch.ceil((max_size[2].to(torch.float32)) / stride) * stride).to(torch.int64)
+        max_size[1] = (
+            torch.ceil((max_size[1].to(torch.float32)) / stride) * stride
+        ).to(torch.int64)
+        max_size[2] = (
+            torch.ceil((max_size[2].to(torch.float32)) / stride) * stride
+        ).to(torch.int64)
         max_size = tuple(max_size)
 
         # work around for
@@ -183,7 +213,9 @@ class GeneralizedRCNNTransform(nn.Module):
         padded_imgs = []
         for img in images:
             padding = [(s1 - s2) for s1, s2 in zip(max_size, tuple(img.shape))]
-            padded_img = torch.nn.functional.pad(img, (0, padding[2], 0, padding[1], 0, padding[0]))
+            padded_img = torch.nn.functional.pad(
+                img, (0, padding[2], 0, padding[1], 0, padding[0])
+            )
             padded_imgs.append(padded_img)
 
         return torch.stack(padded_imgs)
@@ -216,15 +248,18 @@ class GeneralizedRCNNTransform(nn.Module):
 
         return batched_imgs
 
-    def postprocess(self,
-                    result,               # type: List[Dict[str, Tensor]]
-                    image_shapes,         # type: List[Tuple[int, int]]
-                    original_image_sizes  # type: List[Tuple[int, int]]
-                    ):
+    def postprocess(
+        self,
+        result,  # type: List[Dict[str, Tensor]]
+        image_shapes,  # type: List[Tuple[int, int]]
+        original_image_sizes,  # type: List[Tuple[int, int]]
+    ):
         # type: (...) -> List[Dict[str, Tensor]]
         if self.training:
             return result
-        for i, (pred, im_s, o_im_s) in enumerate(zip(result, image_shapes, original_image_sizes)):
+        for i, (pred, im_s, o_im_s) in enumerate(
+            zip(result, image_shapes, original_image_sizes)
+        ):
             boxes = pred["boxes"]
             boxes = resize_boxes(boxes, im_s, o_im_s)
             result[i]["boxes"] = boxes
@@ -239,20 +274,25 @@ class GeneralizedRCNNTransform(nn.Module):
         return result
 
     def __repr__(self):
-        format_string = self.__class__.__name__ + '('
-        _indent = '\n    '
-        format_string += "{0}Normalize(mean={1}, std={2})".format(_indent, self.image_mean, self.image_std)
-        format_string += "{0}Resize(min_size={1}, max_size={2}, mode='bilinear')".format(_indent, self.min_size,
-                                                                                         self.max_size)
-        format_string += '\n)'
+        format_string = self.__class__.__name__ + "("
+        _indent = "\n    "
+        format_string += "{0}Normalize(mean={1}, std={2})".format(
+            _indent, self.image_mean, self.image_std
+        )
+        format_string += (
+            "{0}Resize(min_size={1}, max_size={2}, mode='bilinear')".format(
+                _indent, self.min_size, self.max_size
+            )
+        )
+        format_string += "\n)"
         return format_string
 
 
 def resize_keypoints(keypoints, original_size, new_size):
     # type: (Tensor, List[int], List[int]) -> Tensor
     ratios = [
-        torch.tensor(s, dtype=torch.float32, device=keypoints.device) /
-        torch.tensor(s_orig, dtype=torch.float32, device=keypoints.device)
+        torch.tensor(s, dtype=torch.float32, device=keypoints.device)
+        / torch.tensor(s_orig, dtype=torch.float32, device=keypoints.device)
         for s, s_orig in zip(new_size, original_size)
     ]
     ratio_h, ratio_w = ratios
@@ -260,7 +300,9 @@ def resize_keypoints(keypoints, original_size, new_size):
     if torch._C._get_tracing_state():
         resized_data_0 = resized_data[:, :, 0] * ratio_w
         resized_data_1 = resized_data[:, :, 1] * ratio_h
-        resized_data = torch.stack((resized_data_0, resized_data_1, resized_data[:, :, 2]), dim=2)
+        resized_data = torch.stack(
+            (resized_data_0, resized_data_1, resized_data[:, :, 2]), dim=2
+        )
     else:
         resized_data[..., 0] *= ratio_w
         resized_data[..., 1] *= ratio_h
@@ -270,8 +312,8 @@ def resize_keypoints(keypoints, original_size, new_size):
 def resize_boxes(boxes, original_size, new_size):
     # type: (Tensor, List[int], List[int]) -> Tensor
     ratios = [
-        torch.tensor(s, dtype=torch.float32, device=boxes.device) /
-        torch.tensor(s_orig, dtype=torch.float32, device=boxes.device)
+        torch.tensor(s, dtype=torch.float32, device=boxes.device)
+        / torch.tensor(s_orig, dtype=torch.float32, device=boxes.device)
         for s, s_orig in zip(new_size, original_size)
     ]
     ratio_height, ratio_width = ratios

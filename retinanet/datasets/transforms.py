@@ -1,6 +1,7 @@
 import torch
 from torchvision.transforms import functional as F
 import numpy as np
+from torchvision.transforms import Resize as _resize
 
 
 class ToTensor(object):
@@ -45,6 +46,15 @@ class Compose(object):
     def __call__(self, image, target):
         for t in self.transforms:
             image, target = t(image, target)
+        return image, target
+
+
+class Resize(object):
+    def __init__(self, size):
+        self.resizer = _resize(size)
+
+    def __call__(self, image, target):
+        image = self.resizer(image)
         return image, target
 
 
