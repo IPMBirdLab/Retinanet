@@ -1,15 +1,27 @@
-.. csv-table:: Object Detection on Large Images Task
-   :file: ./reports/large_image_det_report.csv
-   :widths: 20,20,20,20,20
-   :header-rows: 1
+================= =============== ============= ============== ============ 
+                  best loss train best loss val best map train best map val 
+================= =============== ============= ============== ============ 
+det scratch       0.82038         1.09498       0.48844        0.46193      
+det transferlr    0.13463         0.48027       0.62149        0.82601      
+ft det scratch    0.48167         0.96420       0.54555        0.53781      
+ft det transferlr 0.48816         0.73630       0.64344        0.62331      
+================= =============== ============= ============== ============ 
 
+================= =============== ============= ============== ============ 
+                  best loss train best loss val best map train best map val 
+================= =============== ============= ============== ============ 
+det scratch       0.82038         1.09498       0.48844        0.46193      
+det transferlr    0.13463         0.48027       0.62149        0.82601      
+ft det scratch    0.48167         0.96420       0.54555        0.53781      
+ft det transferlr 0.48816         0.73630       0.64344        0.62331      
+================= =============== ============= ============== ============ 
 
-.. csv-table:: Object Detection Task
-   :file: ./reports/det_report.csv
-   :widths: 20,20,20,20,20
-   :header-rows: 1
+================= =============== ============= ============== ============ 
+                  best loss train best loss val best map train best map val 
+================= =============== ============= ============== ============ 
+det scratch       0.82038         1.09498       0.48844        0.46193      
+det transferlr    0.13463         0.48027       0.62149        0.82601      
+ft det scratch    0.48167         0.96420       0.54555        0.53781      
+ft det transferlr 0.48816         0.73630       0.64344        0.62331      
+================= =============== ============= ============== ============ 
 
-.. csv-table:: Image Classification Task
-   :file: ./reports/cls_report.csv
-   :widths: 14,14,14,14,14,14,14
-   :header-rows: 1
