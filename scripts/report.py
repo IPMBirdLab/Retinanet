@@ -129,7 +129,7 @@ def combine_csv_report(
                     ofirst_line = False
 
                     if add_row_names:
-                        line = "," + line.replace("_", " ")
+                        line = "-," + line.replace("_", " ")
                     print(f"wrote : {line}")
                     outf.write(f"{line}")
 
@@ -162,8 +162,10 @@ if __name__ == "__main__":
     combine_csv_report(detectors_list, "./reports/det_report.csv")
     with open("REPORT.rst", "w") as f:
         print("GENERATE REPORT")
+        f.write("Object Detection on Large Images Task\n")
+        f.write("=====================================\n\n")
         process("./reports/det_report.csv", out=f, title=None)
-        f.write("\n")
+        f.write("\n\n")
 
     ## Classification Report
     path = "experiments/logs/"
@@ -178,8 +180,10 @@ if __name__ == "__main__":
     combine_csv_report(detectors_list, "./reports/cls_report.csv")
     with open("REPORT.rst", "a") as f:
         print("GENERATE REPORT")
+        f.write("Object Detection Task\n")
+        f.write("=====================\n\n")
         process("./reports/det_report.csv", out=f, title=None)
-        f.write("\n")
+        f.write("\n\n")
 
     ## Large Image Detection Report
     path = "experiments/logs/"
@@ -194,5 +198,7 @@ if __name__ == "__main__":
     combine_csv_report(detectors_list, "./reports/large_image_det_report.csv")
     with open("REPORT.rst", "a") as f:
         print("GENERATE REPORT")
+        f.write("Image Classification Task\n")
+        f.write("=========================\n\n")
         process("./reports/det_report.csv", out=f, title=None)
-        f.write("\n")
+        f.write("\n\n")
