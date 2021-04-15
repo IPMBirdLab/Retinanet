@@ -164,7 +164,7 @@ class GeneralizedRCNNTransform(nn.Module):
             size = float(self.torch_choice(self.min_size))
         else:
             # FIXME assume for now that testing uses the largest scale
-            size = float(self.min_size[-1])
+            return image, target
         if torchvision._is_tracing():
             image, target = _resize_image_and_masks_onnx(
                 image, size, float(self.max_size), target
