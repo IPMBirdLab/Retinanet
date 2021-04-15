@@ -1,5 +1,0 @@
-,loss,cls loss,bbox loss,mAP
-det scratch,2.20664,1.05096,1.15568,0.00181
-det transferlr,1.78378,0.99395,0.78982,0.08098
-ft det scratch,2.09722,1.00545,1.09177,0.00118
-ft det transferlr,1.97222,1.02301,0.94921,0.00811

@@ -149,6 +149,24 @@ def combine_csv_report(
 
 
 if __name__ == "__main__":
+    ## Large Image Detection Report
+    path = "experiments/logs/"
+    detectors_list = [
+        os.path.join(path, f)
+        for f in os.listdir(path)
+        if re.search(r".*largeImageEval.*\.txt$", f)
+    ]
+    detectors_list.sort()
+    print(detectors_list)
+    create_directory("./reports")
+    combine_csv_report(detectors_list, "./reports/large_image_det_report.csv")
+    with open("REPORT.rst", "w") as f:
+        print("GENERATE REPORT")
+        f.write("Object Detection on Large Images Task\n")
+        f.write("=====================================\n\n")
+        process("./reports/large_image_det_report.csv", out=f, title=None)
+        f.write("\n\n")
+
     ## Detection Report
     path = "experiments/logs/"
     detectors_list = [
@@ -160,10 +178,10 @@ if __name__ == "__main__":
     print(detectors_list)
     create_directory("./reports")
     combine_csv_report(detectors_list, "./reports/det_report.csv")
-    with open("REPORT.rst", "w") as f:
+    with open("REPORT.rst", "a") as f:
         print("GENERATE REPORT")
-        f.write("Object Detection on Large Images Task\n")
-        f.write("=====================================\n\n")
+        f.write("Object Detection Task\n")
+        f.write("=====================\n\n")
         process("./reports/det_report.csv", out=f, title=None)
         f.write("\n\n")
 
@@ -180,25 +198,7 @@ if __name__ == "__main__":
     combine_csv_report(detectors_list, "./reports/cls_report.csv")
     with open("REPORT.rst", "a") as f:
         print("GENERATE REPORT")
-        f.write("Object Detection Task\n")
-        f.write("=====================\n\n")
-        process("./reports/det_report.csv", out=f, title=None)
-        f.write("\n\n")
-
-    ## Large Image Detection Report
-    path = "experiments/logs/"
-    detectors_list = [
-        os.path.join(path, f)
-        for f in os.listdir(path)
-        if re.search(r".*largeImageEval.*\.txt$", f)
-    ]
-    detectors_list.sort()
-    print(detectors_list)
-    create_directory("./reports")
-    combine_csv_report(detectors_list, "./reports/large_image_det_report.csv")
-    with open("REPORT.rst", "a") as f:
-        print("GENERATE REPORT")
         f.write("Image Classification Task\n")
         f.write("=========================\n\n")
-        process("./reports/det_report.csv", out=f, title=None)
+        process("./reports/cls_report.csv", out=f, title=None)
         f.write("\n\n")
