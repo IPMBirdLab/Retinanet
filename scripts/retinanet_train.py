@@ -9,8 +9,11 @@ from retinanet.datasets.transforms import Compose, Normalize, ToTensor
 from retinanet.datasets.bird import BirdDetection
 from retinanet.datasets.utils import train_val_split, TransformDatasetWrapper
 
+from retinanet.utils import create_directory
+
 import os
 import numpy as np
+import pandas as pd
 
 import argparse
 
@@ -59,18 +62,14 @@ if args.val_batch_size is None:
 ###################################################################################
 
 
-def create_directory(path):
-    if not os.path.isdir(path):
-        os.makedirs(path)
-    return path
-
-
 def dump_results_dict(logs_dict, logs_path):
-    with open(logs_path, "w", encoding="utf-8") as f:
-        for key in logs_dict.keys():
-            f.write(
-                f"{key}_train : {logs_dict[key][0]:1.5f}  {key}_val : {logs_dict[key][1]:1.5f}\n"
-            )
+    res_dict = {}
+    for key in logs_dict.keys():
+        res_dict[f"{key}_train"] = [logs_dict[key][0]]
+        res_dict[f"{key}_val"] = [logs_dict[key][1]]
+
+    res = pd.DataFrame.from_dict(res_dict)
+    res.to_csv(logs_path, float_format="%1.5f", index=False)
 
 
 class Average_Meter:
@@ -395,7 +394,7 @@ def _train(model, train_loader, val_loader):
             logs_dict["best_map"][1] = mAP
 
     dump_results_dict(
-        logs_dict, os.path.join(args.log_dir, f"logs/logs_dict_{args.tag}.txt")
+        logs_dict, os.path.join(args.log_dir, f"logs/logs_dict_{args.tag}.csv")
     )
 
     return model

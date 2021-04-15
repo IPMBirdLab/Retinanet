@@ -79,8 +79,8 @@ class BirdDetection(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
+        img_path = os.path.join(self.images_dir, self.files_name[idx])
         file_name, _ = os.path.splitext(self.files_name[idx])
-        img_path = os.path.join(self.images_dir, file_name + ".png")
         xml_path = os.path.join(self.annotaions_dir, file_name + ".xml")
 
         img = cv2.imread(img_path)
@@ -106,10 +106,10 @@ class BirdDetection(Dataset):
             ymin = bndbox.getElementsByTagName("ymin")[0]
             xmax = bndbox.getElementsByTagName("xmax")[0]
             ymax = bndbox.getElementsByTagName("ymax")[0]
-            xmin_data = xmin.childNodes[0].data
-            ymin_data = ymin.childNodes[0].data
-            xmax_data = xmax.childNodes[0].data
-            ymax_data = ymax.childNodes[0].data
+            xmin_data = float(xmin.childNodes[0].data)
+            ymin_data = float(ymin.childNodes[0].data)
+            xmax_data = float(xmax.childNodes[0].data)
+            ymax_data = float(ymax.childNodes[0].data)
             res.append([int(xmin_data), int(ymin_data), int(xmax_data), int(ymax_data)])
 
         return res

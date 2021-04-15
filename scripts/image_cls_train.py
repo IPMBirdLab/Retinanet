@@ -18,6 +18,7 @@ from retinanet.utils.gpu_profile import gpu_profile
 import os
 import sys
 import numpy as np
+import pandas as pd
 
 import argparse
 
@@ -72,11 +73,13 @@ if args.val_batch_size is None:
 
 
 def dump_results_dict(logs_dict, logs_path):
-    with open(logs_path, "w", encoding="utf-8") as f:
-        for key in logs_dict.keys():
-            f.write(
-                f"{key}_train : {logs_dict[key][0]:1.5f}  {key}_val : {logs_dict[key][1]:1.5f}\n"
-            )
+    res_dict = {}
+    for key in logs_dict.keys():
+        res_dict[f"{key}_train"] = [logs_dict[key][0]]
+        res_dict[f"{key}_val"] = [logs_dict[key][1]]
+
+    res = pd.DataFrame.from_dict(res_dict)
+    res.to_csv(logs_path, float_format="%1.5f", index=False)
 
 
 class Average_Meter:
@@ -454,7 +457,7 @@ def _train(model, train_loader, val_loader):
             logs_dict["best_f1"][1] = f1
 
     dump_results_dict(
-        logs_dict, os.path.join(args.log_dir, f"logs/logs_dict_{args.tag}.txt")
+        logs_dict, os.path.join(args.log_dir, f"logs/logs_dict_{args.tag}.csv")
     )
 
     return model
