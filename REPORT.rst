@@ -1,5 +1,5 @@
 ================= =============== ============= ============== ============ 
-                  best loss train best loss val best map train best map val 
+          -       best loss train best loss val best map train best map val 
 ================= =============== ============= ============== ============ 
 det scratch       0.82038         1.09498       0.48844        0.46193      
 det transferlr    0.13463         0.48027       0.62149        0.82601      
@@ -8,7 +8,7 @@ ft det transferlr 0.48816         0.73630       0.64344        0.62331
 ================= =============== ============= ============== ============ 
 
 ================= =============== ============= ============== ============ 
-                  best loss train best loss val best map train best map val 
+        -         best loss train best loss val best map train best map val 
 ================= =============== ============= ============== ============ 
 det scratch       0.82038         1.09498       0.48844        0.46193      
 det transferlr    0.13463         0.48027       0.62149        0.82601      
@@ -17,7 +17,7 @@ ft det transferlr 0.48816         0.73630       0.64344        0.62331
 ================= =============== ============= ============== ============ 
 
 ================= =============== ============= ============== ============ 
-                  best loss train best loss val best map train best map val 
+      -           best loss train best loss val best map train best map val 
 ================= =============== ============= ============== ============ 
 det scratch       0.82038         1.09498       0.48844        0.46193      
 det transferlr    0.13463         0.48027       0.62149        0.82601      
