@@ -51,45 +51,23 @@ def batched_average_precision(boxes, scores, labels, gt_boxes):
 
 
 class MeanAveragePrecisionMeter(object):
-    def __init__(self, total_len=None):
-        self.total_len = total_len
-        self._clear()
+    def __init__(self):
+        self._reinitialize()
 
-    def _clear(self):
-        self.ap_list = []
-        self.add_average_precision_list = self._add_average_precision_list_stream
+    def _reinitialize(self):
+        self.ap_list = None
 
-        # if we know total length of the ap's we can reserve memory beforehand
-        # for better performance
-        if self.total_len is not None:
-            self.ap_list = np.zeros((self.total_len,), np.float32)
-            self.offset = 0
-            self.add_average_precision_list = self._add_average_precision_list_static
-
-    def _add_average_precision_list_static(self, ap_list):
+    def add_average_precision_list(self, ap_list):
         if not isinstance(ap_list, list) and not isinstance(ap_list, np.ndarray):
             raise TypeError
         if isinstance(ap_list, list):
-            # TODO: this might affet performance. must look into it.
             ap_list = np.array(ap_list)
-        self.ap_list[self.offset : self.offset + len(ap_list)] = ap_list
-        self.offset += len(ap_list)
-
-    def _add_average_precision_list_stream(self, ap_list):
-        if not isinstance(ap_list, list):
-            raise TypeError
-
-        self.ap_list += ap_list
+        self.ap_list = np.concainate(self.ap_list, ap_list)
 
     def get_mAP(self, clear=False):
-        l = self.ap_list
-        if isinstance(self.ap_list, list):
-            l = np.array(self.ap_list)
-
-        res = np.sum(l)
-
+        res = np.sum(self.ap_list)
         if clear:
-            self._clear()
+            self._reinitialize()
 
         return res
 
