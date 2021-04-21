@@ -3,10 +3,12 @@ from torch import nn
 import torchvision
 from retinanet.model.detection.transform import GeneralizedRCNNTransform
 
+import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from VideoToolkit.tools import rescal_to_image, get_cv_resize_function
+from retinanet.utils import create_directory
 
 
 def get_features(model, images, device=None):
@@ -40,7 +42,6 @@ def vis_features(
     features = [feat.mean(1) for feat in features]
 
     imact = [feat.squeeze().cpu().detach().numpy() for feat in features]
-    
 
     for im in imact:
         print(im.shape)
@@ -58,7 +59,6 @@ def vis_features(
     img_n = img.cpu().permute((1, 2, 0)).numpy().copy() * np.array(
         [0.229, 0.224, 0.225]
     ) + np.array([0.485, 0.456, 0.406])
-    
 
     # visualize groundtruth boxes
     if gt_boxes is not None:
@@ -82,12 +82,14 @@ def vis_features(
                     (255, 0, 0),
                     2,
                 )
-    
+
     # plotting
     resize_func = get_cv_resize_function()
     img_n = resize_func(img_n, (400, 600))
-    px = 1/plt.rcParams['figure.dpi']  # pixel in inches
-    fig, axarr = plt.subplots(2, 3, figsize=(3*img_n.shape[1]*px, 2*img_n.shape[0]*px))
+    px = 1 / plt.rcParams["figure.dpi"]  # pixel in inches
+    fig, axarr = plt.subplots(
+        2, 3, figsize=(3 * img_n.shape[1] * px, 2 * img_n.shape[0] * px)
+    )
 
     axarr[0, 0].imshow(img_n)
     # visualize features
@@ -125,7 +127,7 @@ def vis_features_CAM(
     ]
 
     imact = [feat.squeeze().cpu().detach().numpy() for feat in features]
-    
+
     for im in imact:
         print(im.shape)
 
@@ -141,7 +143,6 @@ def vis_features_CAM(
     img_n = img.cpu().permute((1, 2, 0)).numpy().copy() * np.array(
         [0.229, 0.224, 0.225]
     ) + np.array([0.485, 0.456, 0.406])
-    
 
     # visualize groundtruth boxes
     if gt_boxes is not None:
@@ -168,9 +169,11 @@ def vis_features_CAM(
     # plotting
     resize_func = get_cv_resize_function()
     img_n = resize_func(img_n, (400, 600))
-    px = 1/plt.rcParams['figure.dpi']  # pixel in inches
-    fig, axarr = plt.subplots(2, 3, figsize=(3*img_n.shape[1]*px, 2*img_n.shape[0]*px))
-    
+    px = 1 / plt.rcParams["figure.dpi"]  # pixel in inches
+    fig, axarr = plt.subplots(
+        2, 3, figsize=(3 * img_n.shape[1] * px, 2 * img_n.shape[0] * px)
+    )
+
     axarr[0, 0].imshow(img_n)
     # visualize features
     resize_func = get_cv_resize_function()
@@ -178,5 +181,7 @@ def vis_features_CAM(
         axarr[j // 3, j % 3].imshow(resize_func(imact[j - 1], img_n.shape[:2]))
 
     if path is not None:
+        directory = os.path.split(path)[0]
+        create_directory(directory)
         fig.savefig(path, format="jpg")
     return fig

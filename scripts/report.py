@@ -64,6 +64,8 @@ def write_row(sizes, items, out=None, endl="\n"):
     out = get_out(out)
 
     for item, max_size in zip(items, sizes):
+        if item.strip("-").isnumeric() and (float(item) == 1000 or float(item) < 0):
+            item = "nan"
         item_len = len(item)
         out.write(item)
 
