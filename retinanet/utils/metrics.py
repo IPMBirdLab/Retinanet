@@ -23,29 +23,33 @@ def batched_average_precision(boxes, scores, labels, gt_boxes):
         gt_boxes_per_img,
     ) in zip(boxes, scores, labels, gt_boxes):
         if boxes_per_img.size(0) == 0:
-            ap_list.append(torch.zeros(1).to(boxes_per_img.device))
-            continue
-        keep = torchvision.ops.batched_nms(
-            boxes_per_img, scores_per_img, labels_per_img, 0.5
-        )
-        boxes_per_img, scores_per_img = (
-            boxes_per_img[keep],
-            scores_per_img[keep],
-        )
+            ap = torch.zeros(1).to(boxes_per_img.device)
+        else:
+            keep = torchvision.ops.batched_nms(
+                boxes_per_img, scores_per_img, labels_per_img, 0.5
+            )
+            boxes_per_img, scores_per_img = (
+                boxes_per_img[keep],
+                scores_per_img[keep],
+            )
 
-        match_scores = _match_predictions(boxes_per_img, gt_boxes_per_img)
-        _, match_indices = torch.sort(scores_per_img, dim=0, descending=True)
-        match_scores = match_scores[match_indices]
-        predicted_truth = torch.where(match_scores > 0.5, 1, 0).to(match_scores.device)
+            match_scores = _match_predictions(boxes_per_img, gt_boxes_per_img)
+            _, match_indices = torch.sort(scores_per_img, dim=0, descending=True)
+            match_scores = match_scores[match_indices]
+            predicted_truth = torch.where(match_scores > 0.5, 1, 0).to(
+                match_scores.device
+            )
 
-        # compute the true-positive sums
-        tp = predicted_truth.float().cumsum(0)
-        # create ranks range
-        rg = torch.arange(1, tp.size(0) + 1).float().to(match_scores.device)
-        # compute precision curve
-        precision = tp.div(rg)
-        # compute average precision
-        ap = precision[match_scores.bool()].sum() / max(float(match_scores.sum()), 1)
+            # compute the true-positive sums
+            tp = predicted_truth.float().cumsum(0)
+            # create ranks range
+            rg = torch.arange(1, tp.size(0) + 1).float().to(match_scores.device)
+            # compute precision curve
+            precision = tp.div(rg)
+            # compute average precision
+            ap = precision[match_scores.bool()].sum() / max(
+                float(match_scores.sum()), 1
+            )
         ap_list.append(ap.item())
     return ap_list
 
@@ -60,12 +64,17 @@ class MeanAveragePrecisionMeter(object):
     def add_average_precision_list(self, ap_list):
         if not isinstance(ap_list, list) and not isinstance(ap_list, np.ndarray):
             raise TypeError
+
         if isinstance(ap_list, list):
             ap_list = np.array(ap_list)
-        self.ap_list = np.concainate(self.ap_list, ap_list)
+
+        if self.ap_list is None:
+            self.ap_list = ap_list
+        else:
+            self.ap_list = np.concatenate((self.ap_list, ap_list))
 
     def get_mAP(self, clear=False):
-        res = np.sum(self.ap_list)
+        res = np.sum(self.ap_list) / self.ap_list.shape[0]
         if clear:
             self._reinitialize()
 
