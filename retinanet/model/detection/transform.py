@@ -121,7 +121,7 @@ class GeneralizedRCNNTransform(nn.Module):
                     "of shape [C, H, W], got {}".format(image.shape)
                 )
             image = self.normalize(image)
-            image, target_index = self.resize(image, target_index)
+            # image, target_index = self.resize(image, target_index)
             images[i] = image
             if targets is not None and target_index is not None:
                 targets[i] = target_index

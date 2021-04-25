@@ -223,8 +223,11 @@ class TrainClassification:
     def one_step(self, data_iterator):
         if self.training:
             self.optimizer.zero_grad()
+        steps = 1
+        if self.training:
+            steps = self.accumulation_steps
 
-        for i in range(self.accumulation_steps):
+        for i in range(steps):
             try:
                 batch = next(data_iterator)
 
@@ -536,8 +539,11 @@ class TrainDetection:
     def one_step(self, data_iterator):
         if self.training:
             self.optimizer.zero_grad()
+        steps = 1
+        if self.training:
+            steps = self.accumulation_steps
 
-        for i in range(self.accumulation_steps):
+        for i in range(steps):
             try:
                 batch = next(data_iterator)
 

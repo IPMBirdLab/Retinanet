@@ -45,7 +45,9 @@ class RetinaNetHead(nn.Module):
             in_channels, num_anchors, num_classes
         )
         self.regression_head = RetinaNetRegressionHead(in_channels, num_anchors)
-        self.image_classification_head = RetinaNetImageClassificationHead(in_channels, num_classes, num_fpn_levels)
+        self.image_classification_head = RetinaNetImageClassificationHead(
+            in_channels, num_classes, num_fpn_levels
+        )
 
     def compute_loss(self, targets, head_outputs, anchors, matched_idxs):
         # type: (List[Dict[str, Tensor]], Dict[str, Tensor], List[Tensor], List[Tensor]) -> Dict[str, Tensor]
@@ -56,7 +58,9 @@ class RetinaNetHead(nn.Module):
             "bbox_regression": self.regression_head.compute_loss(
                 targets, head_outputs, anchors, matched_idxs
             ),
-            "img_classification": self.image_classification_head.compute_loss(targets, head_outputs)
+            "img_classification": self.image_classification_head.compute_loss(
+                targets, head_outputs
+            ),
         }
 
     def forward(self, x):
@@ -278,7 +282,7 @@ class RetinaNetImageClassificationHead(nn.Module):
 
         self.num_classes = num_classes
         self.num_features = num_features
-        
+
         self.fc = nn.Linear(5 * 256, num_classes)
 
     def compute_loss(self, targets, head_outputs):
@@ -286,13 +290,15 @@ class RetinaNetImageClassificationHead(nn.Module):
 
         if targets[0].get("img_cls_labels", None) is None:
             return torch.zeros(1).to(device)
-        
+
         class_loss_fn = nn.MultiLabelSoftMarginLoss().to(device)
-        
+
         cls_logits = head_outputs["img_classification"]
         if len(cls_logits.size()) < 2:
             cls_logits = cls_logits.unsqueeze(0)
-        cls_labels = torch.cat(list(map(lambda x: x["img_cls_labels"].unsqueeze(0), targets)), 0)
+        cls_labels = torch.cat(
+            list(map(lambda x: x["img_cls_labels"].unsqueeze(0), targets)), 0
+        )
 
         return class_loss_fn(cls_logits, cls_labels.float())
 
@@ -302,12 +308,12 @@ class RetinaNetImageClassificationHead(nn.Module):
             cls_logits = F.avg_pool2d(features, kernel_size=features.size()[-2:])
             cls_logits = cls_logits.squeeze().unsqueeze(1)
             cls_logits_list.append(cls_logits)
-            
+
         cls_logits = torch.cat(cls_logits_list, 1).view(-1, 5 * 256)
         cls_logits = self.fc(cls_logits)
-        
+
         return cls_logits
-        
+
 
 class RetinaNet(nn.Module):
     """
@@ -405,7 +411,7 @@ class RetinaNet(nn.Module):
         num_classes,
         num_fpn_levels,
         # transform parameters
-        min_size=800,
+        min_size=256,
         max_size=1333,
         image_mean=None,
         image_std=None,
@@ -646,7 +652,7 @@ class RetinaNet(nn.Module):
         if targets is not None:
             # compute the losses
             losses = self.compute_loss(targets, head_outputs, anchors)
-            
+
         if not self.training:
             # recover level sizes
             num_anchors_per_level = [x.size(2) * x.size(3) for x in features]
@@ -681,8 +687,8 @@ class RetinaNet(nn.Module):
                 )
                 self._has_warned = True
             return losses, detections
-        
-        # type: (Dict[str, Tensor], 
+
+        # type: (Dict[str, Tensor],
         #        List[Dict[str, Tensor]]) -> Tuple[Dict[str, Tensor],
         #        List[Dict[str, Tensor]]]
         if self.training:
@@ -718,6 +724,8 @@ def merge_state_dicts(model_std, pretrained_std):
             merged_dict[k] = v
 
     return merged_dict
+
+
 #######################################################################
 
 
