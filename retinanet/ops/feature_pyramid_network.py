@@ -206,3 +206,29 @@ class LastLevelP6P7(ExtraFPNBlock):
         p.extend([p6, p7])
         names.extend(["p6", "p7"])
         return p, names
+
+
+class LastLevelP6(ExtraFPNBlock):
+    """
+    This module is used in RetinaNet to generate extra layers, P6 and P7.
+    """
+
+    def __init__(self, in_channels: int, out_channels: int):
+        super(LastLevelP6, self).__init__()
+        self.p6 = nn.Conv2d(in_channels, out_channels, 3, 2, 1)
+        nn.init.kaiming_uniform_(self.p6.weight, a=1)
+        nn.init.constant_(self.p6.bias, 0)
+        self.use_P5 = in_channels == out_channels
+
+    def forward(
+        self,
+        p: List[Tensor],
+        c: List[Tensor],
+        names: List[str],
+    ) -> Tuple[List[Tensor], List[str]]:
+        p5, c5 = p[-1], c[-1]
+        x = p5 if self.use_P5 else c5
+        p6 = self.p6(x)
+        p.extend([p6])
+        names.extend(["p6"])
+        return p, names

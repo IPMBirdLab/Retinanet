@@ -14,7 +14,7 @@ from . import _utils as det_utils
 from .anchor_utils import AnchorGenerator
 from .transform import GeneralizedRCNNTransform
 from .backbone_utils import resnet_fpn_backbone, _validate_trainable_layers
-from ...ops.feature_pyramid_network import LastLevelP6P7
+from ...ops.feature_pyramid_network import LastLevelP6P7, LastLevelP6
 from ...ops import sigmoid_focal_loss
 from torchvision.ops import boxes as box_ops
 
@@ -788,8 +788,8 @@ def retinanet_resnet50_fpn(
     backbone = resnet_fpn_backbone(
         "resnet50",
         pretrained_backbone,
-        returned_layers=[2, 3, 4],
-        extra_blocks=LastLevelP6P7(256, 256),
+        returned_layers=[1, 2, 3, 4],
+        extra_blocks=LastLevelP6(256, 256),
         trainable_layers=trainable_backbone_layers,
     )
     num_fpn_levels = 5
