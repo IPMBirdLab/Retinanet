@@ -1,6 +1,7 @@
 import math
 from collections import OrderedDict
 import warnings
+from functools import partial
 
 import torch
 from torch import nn, Tensor
@@ -8,7 +9,7 @@ import torch.nn.functional as F
 from typing import Dict, List, Tuple, Optional
 
 from ._utils import overwrite_eps
-from ..utils import load_state_dict_from_url
+from ..utils import load_state_dict_from_url, load_chpt, get_map_location
 
 from . import _utils as det_utils
 from .anchor_utils import AnchorGenerator
@@ -39,37 +40,48 @@ class RetinaNetHead(nn.Module):
         num_classes (int): number of classes to be predicted
     """
 
-    def __init__(self, in_channels, num_anchors, num_classes, num_fpn_levels):
+    def __init__(
+        self,
+        in_channels,
+        num_anchors,
+        num_classes,
+        num_fpn_levels,
+        extra_heads={},
+    ):
         super().__init__()
+        self.extra_heads = nn.ModuleDict(extra_heads) if len(extra_heads) > 0 else {}
+
         self.classification_head = RetinaNetClassificationHead(
             in_channels, num_anchors, num_classes
         )
         self.regression_head = RetinaNetRegressionHead(in_channels, num_anchors)
-        self.image_classification_head = RetinaNetImageClassificationHead(
-            in_channels, num_classes, num_fpn_levels
-        )
 
     def compute_loss(self, targets, head_outputs, anchors, matched_idxs):
         # type: (List[Dict[str, Tensor]], Dict[str, Tensor], List[Tensor], List[Tensor]) -> Dict[str, Tensor]
-        return {
+        res = {
             "classification": self.classification_head.compute_loss(
                 targets, head_outputs, matched_idxs
             ),
             "bbox_regression": self.regression_head.compute_loss(
                 targets, head_outputs, anchors, matched_idxs
             ),
-            "img_classification": self.image_classification_head.compute_loss(
-                targets, head_outputs
-            ),
         }
+
+        for head in self.extra_heads.values():
+            res.update(head.compute_loss(targets, head_outputs))
+
+        return res
 
     def forward(self, x):
         # type: (List[Tensor]) -> Dict[str, Tensor]
-        return {
+        res = {
             "cls_logits": self.classification_head(x),
             "bbox_regression": self.regression_head(x),
-            "img_classification": self.image_classification_head(x),
         }
+        for head in self.extra_heads.values():
+            res.update(head(x))
+
+        return res
 
 
 class RetinaNetClassificationHead(nn.Module):
@@ -289,7 +301,7 @@ class RetinaNetImageClassificationHead(nn.Module):
         device = next(self.parameters()).device
 
         if targets[0].get("img_cls_labels", None) is None:
-            return torch.zeros(1).to(device)
+            return {"img_classification": torch.zeros(1).to(device)}
 
         class_loss_fn = nn.MultiLabelSoftMarginLoss().to(device)
 
@@ -300,7 +312,7 @@ class RetinaNetImageClassificationHead(nn.Module):
             list(map(lambda x: x["img_cls_labels"].unsqueeze(0), targets)), 0
         )
 
-        return class_loss_fn(cls_logits, cls_labels.float())
+        return {"img_classification": class_loss_fn(cls_logits, cls_labels.float())}
 
     def forward(self, x):
         cls_logits_list = []
@@ -312,7 +324,86 @@ class RetinaNetImageClassificationHead(nn.Module):
         cls_logits = torch.cat(cls_logits_list, 1).view(-1, 5 * 256)
         cls_logits = self.fc(cls_logits)
 
-        return cls_logits
+        return {"img_classification": cls_logits}
+
+
+class RetinanettFCNHead(nn.Module):
+    """the FCN implementation is originally from:
+    https://github.com/pochih/FCN-pytorch/blob/master/python/fcn.py
+    """
+
+    def __init__(self, n_class):
+        super().__init__()
+        self.n_class = n_class
+        self.relu = nn.ReLU(inplace=True)
+        self.deconv1 = nn.ConvTranspose2d(
+            256, 256, kernel_size=3, stride=2, padding=1, dilation=1, output_padding=1
+        )
+        self.bn1 = nn.BatchNorm2d(256)
+        self.deconv2 = nn.ConvTranspose2d(
+            256, 256, kernel_size=3, stride=2, padding=1, dilation=1, output_padding=1
+        )
+        self.bn2 = nn.BatchNorm2d(256)
+        self.deconv3 = nn.ConvTranspose2d(
+            256, 256, kernel_size=3, stride=2, padding=1, dilation=1, output_padding=1
+        )
+        self.bn3 = nn.BatchNorm2d(256)
+        self.deconv4 = nn.ConvTranspose2d(
+            256, 256, kernel_size=3, stride=2, padding=1, dilation=1, output_padding=1
+        )
+        self.bn4 = nn.BatchNorm2d(256)
+        self.deconv5 = nn.ConvTranspose2d(
+            256, 256, kernel_size=3, stride=2, padding=1, dilation=1, output_padding=1
+        )
+        self.bn5 = nn.BatchNorm2d(256)
+        self.deconv6 = nn.ConvTranspose2d(
+            256, 256, kernel_size=3, stride=2, padding=1, dilation=1, output_padding=1
+        )
+        self.bn6 = nn.BatchNorm2d(256)
+        self.classifier = nn.Conv2d(256, n_class, kernel_size=1)
+
+    def compute_loss(self, targets, head_outputs):
+        device = next(self.parameters()).device
+
+        if targets[0].get("regen_labels", None) is None:
+            return {"auto_encoder": torch.zeros(1).to(device)}
+
+        loss_fn = nn.MSELoss().to(device)
+        # loss_fn = lambda pr, gt: torch.sqrt((pr - gt).pow(2).mean())
+        # loss_fn = partial(F.mse_loss, reduce=True)
+
+        decoder_logits = head_outputs["auto_encoder"]
+        # if len(cls_logits.size()) < 2:
+        #     cls_logits = cls_logits.unsqueeze(0)
+        regen_labels = torch.cat(
+            list(map(lambda x: x["regen_labels"].unsqueeze(0), targets)), 0
+        )
+
+        return {"auto_encoder": loss_fn(decoder_logits, regen_labels.float())}
+
+    def forward(self, x):
+        output = x
+        x5 = output[4]  # size=(N, 512, x.H/32, x.W/32)
+        x4 = output[3]  # size=(N, 512, x.H/16, x.W/16)
+        x3 = output[2]  # size=(N, 256, x.H/8,  x.W/8)
+        x2 = output[1]  # size=(N, 128, x.H/4,  x.W/4)
+        x1 = output[0]  # size=(N, 64, x.H/2,  x.W/2)
+
+        score = self.bn1(self.relu(self.deconv1(x5)))  # size=(N, 512, x.H/32, x.W/32)
+        score = score + x4  # element-wise add, size=(N, 512, x.H/32, x.W/32)
+        score = self.bn2(
+            self.relu(self.deconv2(score))
+        )  # size=(N, 256, x.H/16, x.W/16)
+        score = score + x3  # element-wise add, size=(N, 256, x.H/16, x.W/16)
+        score = self.bn3(self.relu(self.deconv3(score)))  # size=(N, 128, x.H/8, x.W/8)
+        score = score + x2  # element-wise add, size=(N, 128, x.H/8, x.W/8)
+        score = self.bn4(self.relu(self.deconv4(score)))  # size=(N, 64, x.H/4, x.W/4)
+        score = score + x1  # element-wise add, size=(N, 64, x.H/4, x.W/4)
+        score = self.bn5(self.relu(self.deconv5(score)))  # size=(N, 32, x.H/2, x.W/2)
+        score = self.bn6(self.relu(self.deconv6(score)))  # size=(N, 32, x.H, x.W)
+        score = self.classifier(score)  # size=(N, n_class, x.H/1, x.W/1)
+
+        return {"auto_encoder": score}  # size=(N, n_class, x.H/1, x.W/1)
 
 
 class RetinaNet(nn.Module):
@@ -418,6 +509,7 @@ class RetinaNet(nn.Module):
         # Anchor parameters
         anchor_generator=None,
         head=None,
+        extra_heads={},
         proposal_matcher=None,
         score_thresh=0.05,
         nms_thresh=0.5,
@@ -453,6 +545,7 @@ class RetinaNet(nn.Module):
                 anchor_generator.num_anchors_per_location()[0],
                 num_classes,
                 num_fpn_levels,
+                extra_heads,
             )
         self.head = head
 
@@ -666,7 +759,7 @@ class RetinaNet(nn.Module):
             # split outputs per level
             split_head_outputs: Dict[str, List[Tensor]] = {}
             for k in head_outputs:
-                if k not in ["img_classification"]:
+                if k not in ["img_classification", "auto_encoder"]:
                     split_head_outputs[k] = list(
                         head_outputs[k].split(num_anchors_per_level, dim=1)
                     )
@@ -691,42 +784,18 @@ class RetinaNet(nn.Module):
         # type: (Dict[str, Tensor],
         #        List[Dict[str, Tensor]]) -> Tuple[Dict[str, Tensor],
         #        List[Dict[str, Tensor]]]
+        # TODO: returning a dynamyc component statically is wrong.
+        #      head outputs must be returned and used dynamically.
         if self.training:
-            return losses, head_outputs["img_classification"]
+            return losses, head_outputs.get("img_classification", None)
         if targets is not None:
-            return losses, detections, head_outputs["img_classification"]
+            return losses, detections, head_outputs.get("img_classification", None)
         return detections
 
 
 model_urls = {
     "retinanet_resnet50_fpn_coco": "https://download.pytorch.org/models/retinanet_resnet50_fpn_coco-eeacb38b.pth",
 }
-
-#######################################################################
-# Load Model State Dictionary
-#######################################################################
-# Dinamically loading model weights
-def get_map_location():
-    if torch.cuda.is_available():
-        map_location = lambda storage, loc: storage.cuda()
-    else:
-        map_location = "cpu"
-
-    return map_location
-
-
-def merge_state_dicts(model_std, pretrained_std):
-    merged_dict = {}
-    for k, v in model_std.items():
-        if k in pretrained_std and v.size() == pretrained_std[k].size():
-            merged_dict[k] = pretrained_std[k]
-        else:
-            merged_dict[k] = v
-
-    return merged_dict
-
-
-#######################################################################
 
 
 def retinanet_resnet50_fpn(
@@ -735,7 +804,8 @@ def retinanet_resnet50_fpn(
     num_classes=91,
     pretrained_backbone=True,
     trainable_backbone_layers=None,
-    **kwargs
+    extra_heads=[],
+    **kwargs,
 ):
     """
     Constructs a RetinaNet model with a ResNet-50-FPN backbone.
@@ -776,6 +846,7 @@ def retinanet_resnet50_fpn(
         pretrained_backbone (bool): If True, returns a model with backbone pre-trained on Imagenet
         trainable_backbone_layers (int): number of trainable (not frozen) resnet layers starting from final block.
             Valid values are between 0 and 5, with 5 meaning all backbone layers are trainable.
+        extra_heads (list[str]): list of extra heads to use. possible choices are ["cls", "regen"].
     """
     trainable_backbone_layers = _validate_trainable_layers(
         pretrained or pretrained_backbone, trainable_backbone_layers, 5, 3
@@ -793,7 +864,24 @@ def retinanet_resnet50_fpn(
         trainable_layers=trainable_backbone_layers,
     )
     num_fpn_levels = 5
-    model = RetinaNet(backbone, num_classes, num_fpn_levels, **kwargs)
+
+    extra_head_objs = {}
+    if "cls" in extra_heads:
+        print("***** adding Image classification head")
+        image_classification_head = RetinaNetImageClassificationHead(
+            backbone.out_channels, num_classes, num_fpn_levels
+        )
+        extra_head_objs.update({"image_classification_head": image_classification_head})
+    if "regen" in extra_heads:
+        print("***** adding Image Regeneration head")
+        autoencoder_head = RetinanettFCNHead(
+            n_class=3
+        )  # 3 number of output channels for RGB
+        extra_head_objs.update({"autoencoder_head": autoencoder_head})
+
+    model = RetinaNet(
+        backbone, num_classes, num_fpn_levels, extra_heads=extra_head_objs, **kwargs
+    )
     if pretrained:
         # state_dict = load_state_dict_from_url(
         #     model_urls["retinanet_resnet50_fpn_coco"], progress=progress
@@ -803,8 +891,6 @@ def retinanet_resnet50_fpn(
             progress=progress,
             map_location=get_map_location(),
         )
-        std = model.state_dict()
-        state_dict = merge_state_dicts(std, state_dict)
-        model.load_state_dict(state_dict)
+        model = load_chpt(model, state_dict)
         overwrite_eps(model, 0.0)
     return model

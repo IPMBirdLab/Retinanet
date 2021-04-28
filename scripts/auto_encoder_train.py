@@ -9,7 +9,7 @@ from torch.utils.tensorboard import SummaryWriter
 from retinanet.model.detection import retinanet_resnet50_fpn
 from retinanet.model.utils import outputs_to_logits, logits_to_preds
 from retinanet.datasets.transforms import Compose, Normalize, ToTensor, RandAugment
-from retinanet.datasets.bird import BirdClassification
+from retinanet.datasets.bird import BirdClassificationRegeneration
 from retinanet.datasets.utils import train_val_split, TransformDatasetWrapper
 
 from retinanet.utils import create_directory
@@ -204,7 +204,15 @@ def evaluate(model, loader):
     model.eval()
 
     val_meter = Average_Meter(
-        ["loss", "image_classification_loss", "acc", "precision", "recall", "F1"]
+        [
+            "loss",
+            "image_classification_loss",
+            "regeneration_loss",
+            "acc",
+            "precision",
+            "recall",
+            "F1",
+        ]
     )
     with torch.no_grad():
         for step, (images, labels) in enumerate(loader):
@@ -213,7 +221,7 @@ def evaluate(model, loader):
             ###############################################################################
             losses, _, cls_outputs = model(images, labels)
 
-            loss = losses["img_classification"]
+            loss = losses["img_classification"] + losses["auto_encoder"]
 
             predicted = logits_to_preds(outputs_to_logits(cls_outputs))
 
@@ -227,6 +235,7 @@ def evaluate(model, loader):
                 {
                     "loss": loss.item(),
                     "image_classification_loss": losses["img_classification"].item(),
+                    "regeneration_loss": losses["auto_encoder"].item(),
                     "acc": acc.item(),
                     "precision": precision.item(),
                     "recall": recall.item(),
@@ -277,7 +286,15 @@ def _train(model, train_loader, val_loader):
         filename_suffix=args.tag,
     )
     train_meter = Average_Meter(
-        ["loss", "image_classification_loss", "acc", "precision", "recall", "F1"]
+        [
+            "loss",
+            "image_classification_loss",
+            "regeneration_loss",
+            "acc",
+            "precision",
+            "recall",
+            "F1",
+        ]
     )
 
     logs_dict = {
@@ -286,7 +303,7 @@ def _train(model, train_loader, val_loader):
         "best_f1": [-1, -1],
     }
 
-    loss_value_dict = {"loss": 0, "img_classification": 0}
+    loss_value_dict = {"loss": 0, "img_classification": 0, "regeneration": 0}
 
     for epoch in range(0, epochs):
         for i_batch, (images, labels) in enumerate(train_loader):
@@ -294,15 +311,18 @@ def _train(model, train_loader, val_loader):
 
             losses, cls_outputs = model(images, labels)
 
-            # loss = losses["classification"] + losses["bbox_regression"]
+            loss = losses["img_classification"] + losses["auto_encoder"]
             # Normalize our loss (if averaged)
-            loss = losses["img_classification"] / args.accumulation_steps
+            loss = loss / args.accumulation_steps
 
             loss.backward()
 
             loss_value_dict["loss"] += loss.item()
             loss_value_dict["img_classification"] += (
                 losses["img_classification"].item() / args.accumulation_steps
+            )
+            loss_value_dict["regeneration"] += (
+                losses["auto_encoder"].item() / args.accumulation_steps
             )
 
             if (
@@ -334,6 +354,7 @@ def _train(model, train_loader, val_loader):
                         "image_classification_loss": loss_value_dict[
                             "img_classification"
                         ],
+                        "regeneration_loss": loss_value_dict["regeneration"],
                         "acc": acc.item(),
                         "precision": precision.item(),
                         "recall": recall.item(),
@@ -350,6 +371,11 @@ def _train(model, train_loader, val_loader):
                     loss_value_dict["img_classification"],
                     iteration // args.accumulation_steps,
                 )
+                train_writer.add_scalar(
+                    "Train/Losses/regeneration_loss",
+                    loss_value_dict["regeneration"],
+                    iteration // args.accumulation_steps,
+                )
 
                 train_writer.add_scalar(
                     "HP/lr",
@@ -358,22 +384,27 @@ def _train(model, train_loader, val_loader):
                 )
 
                 print(
-                    "Epoch: {} | batch: {}/{:.2f}% | Image Classification loss: {:1.5f} | Running loss: {:1.5f}".format(
+                    "Epoch: {} | batch: {}/{:.2f}% | Image Classification loss: {:1.5f} | Regeneration loss: {:1.5f}".format(
                         epoch,
                         i_batch + 1,
                         ((i_batch + 1) / len(train_loader)) * 100,
                         float(losses["img_classification"].item()),
-                        float(loss.item()),
+                        float(losses["auto_encoder"].item()),
                     )
                 )
                 loss_value_dict["loss"] = 0
                 loss_value_dict["img_classification"] = 0
+                loss_value_dict["regeneration"] = 0
 
         ################################################################################
         # Evaluate
         ################################################################################
-        loss, cls_loss, acc, precision, recall, f1 = evaluate(model, val_loader)
-        tloss, tcls_loss, tacc, tprecision, trecall, tf1 = train_meter.get(clear=True)
+        loss, cls_loss, regen_loss, acc, precision, recall, f1 = evaluate(
+            model, val_loader
+        )
+        tloss, tcls_loss, tregen_loss, tacc, tprecision, trecall, tf1 = train_meter.get(
+            clear=True
+        )
 
         train_writer.add_scalar("Evaluate/Losses/loss", tloss, epoch)
         val_writer.add_scalar("Evaluate/Losses/loss", loss, epoch)
@@ -385,6 +416,16 @@ def _train(model, train_loader, val_loader):
         val_writer.add_scalar(
             "Evaluate/Losses/image_classification_loss",
             cls_loss,
+            epoch,
+        )
+        train_writer.add_scalar(
+            "Evaluate/Losses/regeneration_loss",
+            tregen_loss,
+            epoch,
+        )
+        val_writer.add_scalar(
+            "Evaluate/Losses/regeneration_loss",
+            regen_loss,
             epoch,
         )
         train_writer.add_scalar(
@@ -428,10 +469,10 @@ def _train(model, train_loader, val_loader):
             epoch,
         )
         print(
-            "Evaluation -> Epoch: {} | Image Classification loss: {:1.5f} | Running loss: {:1.5f} | Accuracy: {:1.5f} | F1: {:1.5f}".format(
+            "Evaluation -> Epoch: {} | Image Classification loss: {:1.5f} | Regenerarion loss: {:1.5f} | Accuracy: {:1.5f} | F1: {:1.5f}".format(
                 epoch,
                 cls_loss,
-                loss,
+                regen_loss,
                 acc,
                 f1,
             )
@@ -482,22 +523,30 @@ if __name__ == "__main__":
 
     data_log_dir = os.path.join(args.log_dir, "dataset")
     if args.load_from_json:
-        train_dataset = BirdClassification()
-        train_dataset.load(data_log_dir, file_name="train_cls")
-        val_dataset = BirdClassification()
-        val_dataset.load(data_log_dir, file_name="validation_cls")
+        train_dataset = BirdClassificationRegeneration(
+            transform=train_transform, regen_transform=val_transform
+        )
+        train_dataset.load(data_log_dir, file_name="train_cls_regen")
+        val_dataset = BirdClassificationRegeneration(
+            transform=val_transform, regen_transform=val_transform
+        )
+        val_dataset.load(data_log_dir, file_name="validation_cls_regen")
     else:
-        dataset = BirdClassification(root_dir=args.data_dir)
+        dataset = BirdClassificationRegeneration(root_dir=args.data_dir)
 
         train_idx, valid_idx = train_val_split(
             dataset, p=args.train_percent, use_p_of_data=args.use_p_of_data
         )
 
-        train_dataset = dataset.subset(train_idx)
-        val_dataset = dataset.subset(valid_idx)
+        train_dataset = dataset.subset(
+            train_idx, transform=train_transform, regen_transform=val_transform
+        )
+        val_dataset = dataset.subset(
+            valid_idx, transform=val_transform, regen_transform=val_transform
+        )
 
-        train_dataset.save(data_log_dir, file_name="train_cls")
-        val_dataset.save(data_log_dir, file_name="validation_cls")
+        train_dataset.save(data_log_dir, file_name="train_cls_regen")
+        val_dataset.save(data_log_dir, file_name="validation_cls_regen")
 
         print(f"\nDataset size :     {len(dataset)}")
 
@@ -505,25 +554,21 @@ if __name__ == "__main__":
     print(f"Validation subset:   {len(val_dataset)}")
     print(f"\nBatches per epoch: {len(train_dataset)//args.batch_size}")
 
-    train_dataset = TransformDatasetWrapper(train_dataset, train_transform)
-    val_dataset = TransformDatasetWrapper(val_dataset, val_transform)
-
     train_loader = DataLoader(
         dataset=train_dataset,
         batch_size=args.batch_size,
         num_workers=0 if device_str == "cuda" else args.num_workers,
         # pin_memory=True if device_str == "cuda" else False,
-        collate_fn=BirdClassification.collate_fn,
+        collate_fn=BirdClassificationRegeneration.collate_fn,
         drop_last=True,
         shuffle=True,
     )
-
     val_loader = DataLoader(
         dataset=val_dataset,
         batch_size=args.val_batch_size,
         num_workers=0 if device_str == "cuda" else args.num_workers,
         # pin_memory=True if device_str == "cuda" else False,
-        collate_fn=BirdClassification.collate_fn,
+        collate_fn=BirdClassificationRegeneration.collate_fn,
         drop_last=True,
         shuffle=False,
     )
@@ -536,7 +581,7 @@ if __name__ == "__main__":
         pretrained=args.pretrained_backend,
         pretrained_backbone=args.pretrained_backend,
         trainable_backbone_layers=5,
-        extra_heads=["cls"],
+        extra_heads=["cls", "regen"],
     )
 
     if args.pretrained != "":

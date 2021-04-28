@@ -5,6 +5,7 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
 from retinanet.model.detection import retinanet_resnet50_fpn
+from retinanet.model.utils import load_chpt
 from retinanet.datasets.transforms import Compose, Normalize, ToTensor
 from retinanet.datasets.bird import BirdDetection
 from retinanet.datasets.utils import train_val_split, TransformDatasetWrapper
@@ -268,6 +269,6 @@ if __name__ == "__main__":
 
     if args.pretrained != "":
         print(f"Using pretrained model : {args.pretrained}")
-        model.load_state_dict(torch.load(args.pretrained))
+        model = load_chpt(model, args.pretrained)
 
     evaluate(model, loader)

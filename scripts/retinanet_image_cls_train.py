@@ -913,6 +913,8 @@ if __name__ == "__main__":
         num_classes=2,
         pretrained=args.pretrained_backend,
         pretrained_backbone=args.pretrained_backend,
+        trainable_backbone_layers=5,
+        extra_heads=["cls"],
     )
 
     if args.pretrained != "":

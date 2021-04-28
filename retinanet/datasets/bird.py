@@ -198,12 +198,12 @@ class BirdClassification(Dataset):
             raise FileNotFoundError
         self.load_state_dict(st_path)
 
-    def subset(self, indices):
+    def subset(self, indices, **kwargs):
         st_dict = self.get_state_dict()
         st_dict["image_path_list"] = [
             st_dict["image_path_list"][idx] for idx in indices
         ]
-        new_subset = BirdClassification()
+        new_subset = self.__class__(**kwargs)
         new_subset.set_state_dict(st_dict)
         return new_subset
 
@@ -236,6 +236,39 @@ class BirdClassification(Dataset):
             image = self.transform(image)
 
         return image, {"img_cls_labels": label}
+
+    @staticmethod
+    def collate_fn(batch):
+        imgs = [item[0] for item in batch]
+        trgts = [item[1] for item in batch]
+
+        return [imgs, trgts]
+
+
+class BirdClassificationRegeneration(BirdClassification):
+    def __init__(self, regen_transform=None, **kwargs):
+        super().__init__(**kwargs)
+
+        self.regen_transform = regen_transform
+
+    def __getitem__(self, idx):
+        image_path = self.image_path_list[idx]
+
+        image = self.get_image(image_path)
+
+        label = one_hot_embedding(
+            [self.class_dic[tag] for tag in self.get_tags(image_path)], self.classes
+        )
+
+        if self.regen_transform is not None:
+            tgt_image, _ = self.regen_transform(image.copy(), None)
+
+        target = {"img_cls_labels": label, "regen_labels": tgt_image}
+
+        if self.transform:
+            image, target = self.transform(image, target)
+
+        return image, target
 
     @staticmethod
     def collate_fn(batch):

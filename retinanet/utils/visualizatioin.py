@@ -115,7 +115,7 @@ def vis_features_CAM(
     features = get_features(model, [img], device)
 
     weights = nn.Parameter(
-        model.head.image_classification_head.fc.weight.t().unsqueeze(0)
+        model.head.extra_heads.image_classification_head.fc.weight.t().unsqueeze(0)
     )
 
     get_weight = lambda weight, idx, cls: weight[:, :, cls].view(5, 256)[idx, :][
