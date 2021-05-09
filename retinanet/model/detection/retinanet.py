@@ -532,7 +532,7 @@ class RetinaNet(nn.Module):
 
         if anchor_generator is None:
             anchor_sizes = tuple(
-                (x, int(x * 2 ** (1.0 / 3)), int(x * 2 ** (2.0 / 3)))
+                (int(x * 0.4), int(x * 0.516), int(x * 0.656))
                 for x in [32, 64, 128, 256, 512]
             )
             aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)

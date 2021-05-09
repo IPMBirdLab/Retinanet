@@ -243,8 +243,8 @@ if __name__ == "__main__":
     )
 
     dataset = BirdDetection(
-        images_dir=os.path.join(args.data_dir, "JPEGImages"),
-        annotations_dir=os.path.join(args.data_dir, "Annotations"),
+        images_dir=os.path.join(args.data_dir, "test"),
+        annotations_dir=os.path.join(args.data_dir, "test"),
     )
 
     print(f"\nDataset size :   {len(dataset)}")

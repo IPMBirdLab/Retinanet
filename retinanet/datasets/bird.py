@@ -3,7 +3,15 @@ import cv2
 import glob
 import random
 import json
-from PIL import Image
+
+import numpy as np
+import PIL
+
+import skimage.io
+import skimage.transform
+import skimage.color
+import skimage
+
 import xml.dom.minidom
 import torch
 from torch.utils.data import Dataset
@@ -19,7 +27,9 @@ class BirdDetection(Dataset):
         self.transforms = transform
 
     def init_dataset(self, images_dir="./data", annotations_dir="./ann"):
-        self.files_name = os.listdir(images_dir)
+        self.files_name = [
+            os.path.basename(p) for p in glob.glob(os.path.join(images_dir, "*.png"))
+        ]
         self.images_dir = images_dir
         self.annotaions_dir = annotations_dir
 
@@ -83,7 +93,7 @@ class BirdDetection(Dataset):
         file_name, _ = os.path.splitext(self.files_name[idx])
         xml_path = os.path.join(self.annotaions_dir, file_name + ".xml")
 
-        img = cv2.imread(img_path)
+        img = self.load_image(img_path)
         ann = self.read_annotaions(xml_path)
         lbl = [1 for _ in range(len(ann))]
 
@@ -93,6 +103,15 @@ class BirdDetection(Dataset):
             img, target = self.transforms(img, target)
 
         return img, target
+
+    def load_image(self, image_path):
+        # img = skimage.io.imread(path)
+
+        # if len(img.shape) == 2:
+        #     img = skimage.color.gray2rgb(img)
+        image = PIL.Image.open(image_path).convert("RGB")
+
+        return image
 
     def read_annotaions(self, xml_path):
         res = []
@@ -211,7 +230,7 @@ class BirdClassification(Dataset):
         return len(self.image_path_list)
 
     def get_image(self, image_path):
-        image = Image.open(image_path).convert("RGB")
+        image = PIL.Image.open(image_path).convert("RGB")
         if self.image_size is None:
             self.image_size = image.size
         assert image.size == self.image_size

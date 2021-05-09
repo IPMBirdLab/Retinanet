@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from VideoToolkit.tools import rescal_to_image, get_cv_resize_function
+from skimage.transform import resize
 from retinanet.utils import create_directory
 
 
@@ -35,6 +36,7 @@ def vis_features(
     threshold=0,
     path=None,
     device=None,
+    thickness=2,
 ):
     model.eval()
     # get features
@@ -68,7 +70,7 @@ def vis_features(
                 (int(box[0]), int(box[1])),
                 (int(box[2]), int(box[3])),
                 (0, 255, 0),
-                2,
+                thickness,
             )
 
     # visualize boxes
@@ -80,12 +82,11 @@ def vis_features(
                     (int(box[0]), int(box[1])),
                     (int(box[2]), int(box[3])),
                     (255, 0, 0),
-                    2,
+                    thickness,
                 )
 
     # plotting
-    resize_func = get_cv_resize_function()
-    img_n = resize_func(img_n, (400, 600))
+    img_n = resize(img_n, (400, 600), anti_aliasing=True)
     px = 1 / plt.rcParams["figure.dpi"]  # pixel in inches
     fig, axarr = plt.subplots(
         2, 3, figsize=(3 * img_n.shape[1] * px, 2 * img_n.shape[0] * px)
@@ -94,10 +95,16 @@ def vis_features(
     axarr[0, 0].imshow(img_n)
     # visualize features
     for j in range(1, 6):
-        axarr[j // 3, j % 3].imshow(resize_func(imact[j - 1], img_n.shape[:2]))
+        axarr[j // 3, j % 3].imshow(resize(imact[j - 1], img_n.shape[:2]))
 
     if path is not None:
+        directory = os.path.split(path)[0]
+        create_directory(directory)
         fig.savefig(path, format="jpg")
+        cv2.imwrite(
+            path[:-4] + "_img.jpg",
+            cv2.cvtColor(np.float32(img_n) * 255, cv2.COLOR_RGB2BGR),
+        )
     return fig
 
 
@@ -109,6 +116,7 @@ def vis_features_CAM(
     threshold=0,
     path=None,
     device=None,
+    thickness=2,
 ):
     model.eval()
     # get features
@@ -152,7 +160,7 @@ def vis_features_CAM(
                 (int(box[0]), int(box[1])),
                 (int(box[2]), int(box[3])),
                 (0, 255, 0),
-                2,
+                thickness,
             )
 
     # visualize boxes
@@ -164,11 +172,10 @@ def vis_features_CAM(
                     (int(box[0]), int(box[1])),
                     (int(box[2]), int(box[3])),
                     (255, 0, 0),
-                    2,
+                    thickness,
                 )
     # plotting
-    resize_func = get_cv_resize_function()
-    img_n = resize_func(img_n, (400, 600))
+    img_n = resize(img_n, (400, 600), anti_aliasing=True)
     px = 1 / plt.rcParams["figure.dpi"]  # pixel in inches
     fig, axarr = plt.subplots(
         2, 3, figsize=(3 * img_n.shape[1] * px, 2 * img_n.shape[0] * px)
@@ -176,12 +183,15 @@ def vis_features_CAM(
 
     axarr[0, 0].imshow(img_n)
     # visualize features
-    resize_func = get_cv_resize_function()
     for j in range(1, 6):
-        axarr[j // 3, j % 3].imshow(resize_func(imact[j - 1], img_n.shape[:2]))
+        axarr[j // 3, j % 3].imshow(resize(imact[j - 1], img_n.shape[:2]))
 
     if path is not None:
         directory = os.path.split(path)[0]
         create_directory(directory)
         fig.savefig(path, format="jpg")
+        cv2.imwrite(
+            path[:-4] + "_img.jpg",
+            cv2.cvtColor(np.float32(img_n) * 255, cv2.COLOR_RGB2BGR),
+        )
     return fig
