@@ -850,13 +850,13 @@ def build_classification_dataloaders():
     return train_loader, val_loader
 
 
-def get_detection_train_obj(model):
-    train_loader, val_loader = build_detection_dataloaders()
+def get_detection_train_obj(model, data_loaders, epochs):
+    train_loader, val_loader = data_loaders
     det_obj = TrainDetection(
         model,
         train_loader,
         val_loader,
-        epochs=args.max_epoch,
+        epochs=epochs,
         accumulation_steps=args.det_accumulation_steps,
         opt=args.det_opt,
         lr=args.det_lr,
@@ -872,13 +872,13 @@ def get_detection_train_obj(model):
     return det_obj
 
 
-def get_classification_train_obj(model):
-    train_loader, val_loader = build_classification_dataloaders()
+def get_classification_train_obj(model, data_loders, epochs):
+    train_loader, val_loader = data_loders
     cls_obj = TrainClassification(
         model,
         train_loader,
         val_loader,
-        epochs=args.max_epoch,
+        epochs=epochs,
         accumulation_steps=args.cls_accumulation_steps,
         opt=args.cls_opt,
         lr=args.cls_lr,
@@ -894,13 +894,23 @@ def get_classification_train_obj(model):
     return cls_obj
 
 
+def get_iter_ratio(data_loaders):
+    lengths = np.array([len(loader) for loader in data_loaders])
+    iter_num_list = np.tile(np.max(lengths), lengths.shape) // lengths
+
+    return iter_num_list
+
+
 def _train(model, train_obj_list, epochs):
     model.train()
     model.to(device)
 
+    iter_num_list = get_iter_ratio([obj.train_loader for obj in train_obj_list])
+
     for epoch in range(epochs):
-        for train_obj in train_obj_list:
-            train_obj.one_epoch_cycle(epoch)
+        for idx, train_obj in enumerate(train_obj_list):
+            for i in range(iter_num_list[idx]):
+                train_obj.one_epoch_cycle(epoch * iter_num_list[idx] + i)
 
     map(lambda obj: obj.dump_results_dict(), train_obj_list)
 
@@ -921,8 +931,17 @@ if __name__ == "__main__":
         print(f"Using pretrained model : {args.pretrained}")
         model.load_state_dict(torch.load(args.pretrained))
 
-    cls_train_obj = get_classification_train_obj(model)
-    det_train_obj = get_detection_train_obj(model)
+    cls_data_loaders = build_classification_dataloaders()
+    det_data_loaders = build_detection_dataloaders()
+
+    epochs_list = args.max_epoch * get_iter_ratio(
+        [l[0] for l in [cls_data_loaders, det_data_loaders]]
+    )
+
+    cls_train_obj = get_classification_train_obj(
+        model, cls_data_loaders, epochs_list[0]
+    )
+    det_train_obj = get_detection_train_obj(model, det_data_loaders, epochs_list[1])
 
     model = _train(model, [cls_train_obj, det_train_obj], args.max_epoch)
 
